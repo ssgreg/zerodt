@@ -106,6 +106,14 @@ func listenFds() ([]int, error) {
 	return fds, nil
 }
 
+// prepareEnv sets activation environment variables for a child process.
+func prepareEnv(count int) *[]string {
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("%s=%d", envListenFds, count))
+	env = append(env, fmt.Sprintf("%s=%d", envListenPid, listenPidDefault))
+	return &env
+}
+
 // isSocketTCP checks if passed file descriptor is a TCP socket
 func isSocketTCP(fd int) (bool, error) {
 	// check S_IFSOCK flag
@@ -172,7 +180,7 @@ func newFileOnSocket(fd int) (*os.File, error) {
 	}
 
 	// To tell to truth filename is optional for sockets. But we need
-	// to do out best.
+	// to do our best.
 	name, err := makeSocketFilename(fd)
 	if err != nil {
 		return nil, err

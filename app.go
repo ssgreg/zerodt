@@ -61,7 +61,7 @@ func (a *App) interceptSignals(ctx context.Context, wg *sync.WaitGroup) {
 
 	for {
 		select {
-		// signal
+		// OS signal.
 		case s := <-signals:
 			switch s {
 			case syscall.SIGINT, syscall.SIGTERM:
@@ -77,7 +77,7 @@ func (a *App) interceptSignals(ctx context.Context, wg *sync.WaitGroup) {
 				}
 				logger.Printf("ZeroDT: child '%d' successfully started", pid)
 			}
-		// cancel, no need to shutdown servers
+		// Cancel, no need to shutdown servers.
 		case <-ctx.Done():
 			return
 		}
@@ -97,7 +97,7 @@ func (a *App) killParent() {
 	logger.Printf("ZeroDT: send termination signal to the parent with pid=%d", os.Getppid())
 	err := syscall.Kill(os.Getppid(), syscall.SIGTERM)
 	if err != nil {
-		// It does not allowed to run both binaries.
+		// It does not allowed running both binaries.
 		panic(err)
 	}
 }
@@ -125,7 +125,7 @@ func (a *App) Serve() error {
 			}
 
 			err = s.Serve(tcpKeepAliveListener{l})
-			// Serve always returns a non-nil error
+			// Serve always returns a non-nil error.
 			logger.Printf("ZeroDT: server '%v' is finished with %v", s.Addr, err)
 		}(s)
 	}
@@ -138,35 +138,30 @@ func (a *App) Serve() error {
 	srvWG.Wait()
 	// Stop intercepting signals. No need to shutdown servers in this case.
 	cancelFunc()
-	// Wait for the last goroutine
+	// Wait for the last goroutine.
 	sigWG.Wait()
 
 	return nil
 }
 
+// startAnotherProcess starts another process of youself and passes active
+// listeners to a child to perform socket activation.
 func (a *App) startAnotherProcess() (int, error) {
-	// Executable returns the path name for the executable that
-	// started the current process.
+	// Get the path name for the executable that started the current process.
 	path, err := os.Executable()
 	if err != nil {
 		return -1, err
 	}
-	// EvalSymlinks returns the path name after the evaluation
-	// of any symbolic links.
+	// Fix the path name after the evaluation of any symbolic links.
 	path, err = filepath.EvalSymlinks(path)
 	if err != nil {
 		return -1, err
 	}
 
-	// Set activation environment variables for a child process.
-	env := os.Environ()
-	env = append(env, fmt.Sprintf("%s=%d", envListenFds, 1))
-	env = append(env, fmt.Sprintf("%s=%d", envListenPid, listenPidDefault))
-
-	// Start the original executable with the original working directory
+	// Start the original executable with the original working directory.
 	process, err := os.StartProcess(path, os.Args, &os.ProcAttr{
 		Dir:   originalWD,
-		Env:   env,
+		Env:   *prepareEnv(len(a.e.activeFiles())),
 		Files: append([]*os.File{os.Stdin, os.Stdout, os.Stderr}, a.e.activeFiles()...),
 	})
 	if err != nil {
@@ -177,7 +172,7 @@ func (a *App) startAnotherProcess() (int, error) {
 }
 
 // createOrAcquireListener is a helper function that acquires an inherited
-// listener or creates a new one and adds it an exchange
+// listener or creates a new one and adds to an exchange
 func createOrAcquireListener(e *exchange, netStr, addrStr string) (*net.TCPListener, error) {
 	addr, err := net.ResolveTCPAddr(netStr, addrStr)
 	if err != nil {
@@ -206,11 +201,12 @@ func createOrAcquireListener(e *exchange, netStr, addrStr string) (*net.TCPListe
 	return l, nil
 }
 
+// formatInherited prints info about inherited listeners to a string.
 func formatInherited(e *exchange) string {
 	result := "["
 	for i, pr := range e.inherited {
 		if i != 0 {
-			result += ","
+			result += ", "
 		}
 		result += fmt.Sprintf("%v", pr.l.Addr())
 	}

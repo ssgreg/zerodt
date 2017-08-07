@@ -22,9 +22,8 @@ func main() {
 	r := mux.NewRouter()
 	r.Methods("GET").HandlerFunc(handler)
 
-	a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: r})
+	a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: r}, &http.Server{Addr: "127.0.0.1:8082", Handler: r})
 	a.Serve()
 
-	zerodt.Greg()
 	fmt.Printf("That's all Folks!")
 }
