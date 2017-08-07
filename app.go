@@ -22,16 +22,17 @@ var (
 
 // App TODO
 type App struct {
-	servers []*http.Server
-	e       *exchange
+	servers  []*http.Server
+	exchange *exchange
 }
 
 // NewApp TODO
 func NewApp(servers ...*http.Server) *App {
-	e, err := newExchange()
+	inherited, err := inheritedFileListenerPairs()
 	if err != nil {
 		panic(err)
 	}
+	e := newExchange(inherited)
 	logger.Printf("ZeroDT: started for pid=%d with inherited=%s", os.Getpid(), formatInherited(e))
 	return &App{servers, e}
 }
@@ -85,7 +86,7 @@ func (a *App) interceptSignals(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (a *App) killParent() {
-	if !a.e.didInherit() {
+	if !a.exchange.didInherit() {
 		return
 	}
 	// If it's systemd - keep it alive. This is possible when
@@ -117,7 +118,7 @@ func (a *App) Serve() error {
 		go func(s *http.Server) {
 			defer srvWG.Done()
 
-			l, err := createOrAcquireListener(a.e, "tcp", s.Addr)
+			l, err := createOrAcquireListener(a.exchange, "tcp", s.Addr)
 			if err != nil {
 				// TODO: error channel
 				logger.Printf("ZeroDT: failed to listen on '%v' with %v", s.Addr, err)
@@ -158,11 +159,13 @@ func (a *App) startAnotherProcess() (int, error) {
 		return -1, err
 	}
 
+	files := a.exchange.activeFiles()
+
 	// Start the original executable with the original working directory.
 	process, err := os.StartProcess(path, os.Args, &os.ProcAttr{
 		Dir:   originalWD,
-		Env:   *prepareEnv(len(a.e.activeFiles())),
-		Files: append([]*os.File{os.Stdin, os.Stdout, os.Stderr}, a.e.activeFiles()...),
+		Env:   *prepareEnv(len(files)),
+		Files: append([]*os.File{os.Stdin, os.Stdout, os.Stderr}, files...),
 	})
 	if err != nil {
 		return -1, err
@@ -191,7 +194,7 @@ func createOrAcquireListener(e *exchange, netStr, addrStr string) (*net.TCPListe
 	if err != nil {
 		return nil, err
 	}
-	err = e.addListener(l)
+	err = e.activateListener(l)
 	if err != nil {
 		l.Close()
 		return nil, err

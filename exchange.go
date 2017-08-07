@@ -10,70 +10,18 @@ import (
 	"syscall"
 )
 
-// A Lyrical Digression.
-//
-// During the early alpha version of the package, I discovered an issue
-// connected with TCPListener's File() function.
-//
-// Sometimes my demo http server hang up after successful Shutdown call.
-// The only way to exit from server.Serve() was extra http request that
-// was always finished with an error to a client.
-//
-// A long investigation has revealed that the cause of a race condition
-// was a code with a strange comment (net/fd_unix.go, dup()):
-//
-//	// We want blocking mode for the new fd, hence the double negative.
-//	// This also puts the old fd into blocking mode, meaning that
-//	// I/O will block the thread instead of letting us use the epoll server.
-//	// Everything will still work, just with more threads.
-//	if err = syscall.SetNonblock(ns, false); err != nil {
-//		return nil, os.NewSyscallError("setnonblock", err)
-//	}
-//
-// This code put my listener's fd into blocking mode and force an issue
-// to happen. Unfortunately SetNonblock() did nothing while server.Server()
-// was calling Accept() function.
-//
-// To avoid the race condition I decided to duplicate a listener just
-// before server.Server() and put it into non-blocking mode by myself.
-// This forces me to open and keep additional file descriptor per each
-// listener, but it's worth it.
-
-// socketPair describes a pair of TCPListener and File.
-type socketPair struct {
-	l *net.TCPListener
-	f *os.File
-}
-
 // exchange - TODO
 type exchange struct {
-	inherited []*socketPair
+	inherited []*fileListenerPair
 	active    []*os.File
 	mutex     sync.Mutex
 }
 
-func newExchange() (*exchange, error) {
-	// Are there some sockets to inherit?
-	fds, err := listenFds()
-	if err != nil {
-		return nil, err
-	}
-	// Start to listen them.
-	pairs := make([]*socketPair, len(fds))
-	for i, fd := range fds {
-		f, err := newFileOnSocket(fd)
-		if err != nil {
-			return nil, err
-		}
-		l, err := newFileTCPListener(f)
-		if err != nil {
-			return nil, err
-		}
-		pairs[i] = &socketPair{l, f}
-	}
-	return &exchange{inherited: pairs}, nil
+func newExchange(pairs []*fileListenerPair) *exchange {
+	return &exchange{inherited: pairs}
 }
 
+// didInherit checks whether exchange contains inherited listeners.
 func (e *exchange) didInherit() bool {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
@@ -81,6 +29,7 @@ func (e *exchange) didInherit() bool {
 	return len(e.inherited) > 0
 }
 
+// activeFiles returns an array of files, corresponded to active listeners.
 func (e *exchange) activeFiles() []*os.File {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
@@ -91,6 +40,7 @@ func (e *exchange) activeFiles() []*os.File {
 	return active
 }
 
+// acquireListener allows to get one of the inherited listeners.
 func (e *exchange) acquireListener(addr *net.TCPAddr) *net.TCPListener {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
@@ -110,7 +60,9 @@ func (e *exchange) acquireListener(addr *net.TCPAddr) *net.TCPListener {
 	return nil
 }
 
-func (e *exchange) addListener(l *net.TCPListener) error {
+// activateListener duplicates a listener and keeps duplicate.
+// This listener now can be inherited by a child process.
+func (e *exchange) activateListener(l *net.TCPListener) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
@@ -120,7 +72,7 @@ func (e *exchange) addListener(l *net.TCPListener) error {
 	if err != nil {
 		return err
 	}
-	// Note! Read a comment on the top of the file to understand
+	// Read 'A Lyrical Digression' in file_listener.go to understand
 	// what's going on.
 	err = syscall.SetNonblock(int(f.Fd()), true)
 	if err != nil {

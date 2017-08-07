@@ -1,5 +1,5 @@
-# zerodt
-Zero downtime and graceful shutdown in one line of code
+# ZeroDT
+Zero downtime restart and graceful shutdown in one line of code
 
 - TODO: errors in a separate channel
 - TODO: prestart handler
