@@ -9,17 +9,18 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPrepareEnv(t *testing.T) {
 	os.Setenv("TEST_PREPARE_ENV", "EXISTS")
 	env := prepareEnv(7)
-	if len(*env) < 3 {
+	if len(env) < 3 {
 		t.Fail()
 	}
-	assert.NotEmpty(t, isExists(env, "LISTEN_FDS=7"))
-	assert.NotEmpty(t, isExists(env, "LISTEN_PID=0"))
-	assert.NotEmpty(t, isExists(env, "TEST_PREPARE_ENV=EXISTS"))
+	assert.NotEmpty(t, stringInSlice(env, "LISTEN_FDS=7"))
+	assert.NotEmpty(t, stringInSlice(env, "LISTEN_PID=0"))
+	assert.NotEmpty(t, stringInSlice(env, "TEST_PREPARE_ENV=EXISTS"))
 }
 
 func TestUnsetEnvAll(t *testing.T) {
@@ -35,7 +36,7 @@ func TestListenFdsCount(t *testing.T) {
 	// Normal exit without activation
 	setEnv("", "")
 	count, err := listenFdsCount()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 
 	// Bad LISTEN_PID
@@ -43,9 +44,9 @@ func TestListenFdsCount(t *testing.T) {
 	count, err = listenFdsCount()
 	assertErr(t, err, "^bad environment variable: LISTEN_PID=not a pid$")
 
-	setEnv("777", "")
+	setEnv("1", "")
 	count, err = listenFdsCount()
-	assertErr(t, err, fmt.Sprintf("^bad environment variable: LISTEN_PID=777 with pid=%d$", os.Getpid()))
+	assertErr(t, err, fmt.Sprintf("^bad environment variable: LISTEN_PID=1 with pid=%d$", os.Getpid()))
 
 	// No LISTEN_FDS
 	setEnv(strconv.Itoa(os.Getpid()), "")
@@ -64,13 +65,13 @@ func TestListenFdsCount(t *testing.T) {
 	// All ok
 	setEnv(strconv.Itoa(os.Getpid()), "7")
 	count, err = listenFdsCount()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 7, count)
 
 	// All ok with default LISTEN_PID
 	setEnv("0", "148")
 	count, err = listenFdsCount()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 148, count)
 }
 
@@ -78,13 +79,13 @@ func TestListenFds(t *testing.T) {
 	// Normal exit without activation
 	setEnv("", "")
 	fds, err := listenFds()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 0, len(fds))
 
 	// Normal exit with activation
 	setEnv("0", "2")
 	fds, err = listenFds()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, []int{3, 4}, fds)
 
 	// Bad env
@@ -96,15 +97,15 @@ func TestListenFds(t *testing.T) {
 func setEnv(pid, fds string) {
 	unsetEnvAll()
 	if pid != "" {
-		os.Setenv(envListenPid, pid)
+		os.Setenv(envListenPID, pid)
 	}
 	if fds != "" {
-		os.Setenv(envListenFds, fds)
+		os.Setenv(envListenFDS, fds)
 	}
 }
 
-func isExists(a *[]string, v string) bool {
-	for _, s := range *a {
+func stringInSlice(a []string, v string) bool {
+	for _, s := range a {
 		if s == v {
 			return true
 		}

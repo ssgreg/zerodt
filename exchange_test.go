@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEmptyExchange(t *testing.T) {
@@ -17,7 +18,7 @@ func TestEmptyExchange(t *testing.T) {
 
 	l := newTCPListener(t)
 	err := e.activateListener(l)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, e.inherited)
 	assert.Equal(t, 1, len(e.active))
 	assert.NoError(t, l.Close())
@@ -28,7 +29,7 @@ func TestEmptyExchange(t *testing.T) {
 func TestExchange(t *testing.T) {
 	l := newTCPListener(t)
 	f, err := l.File()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	e := newExchange([]*fileListenerPair{{l, f}})
 	assert.Equal(t, 1, len(e.inherited))
@@ -36,18 +37,17 @@ func TestExchange(t *testing.T) {
 	assert.Equal(t, true, e.didInherit())
 
 	l1 := e.acquireListener(l.Addr().(*net.TCPAddr))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, l1)
 	assert.Empty(t, e.inherited[0])
 	assert.Equal(t, 1, len(e.active))
-
 	assert.Equal(t, 1, len(e.activeFiles()))
 }
 
 func newTCPListener(t *testing.T) *net.TCPListener {
 	addr, err := net.ResolveTCPAddr("tcp", ":0")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	l, err := net.ListenTCP("tcp", addr)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	return l
 }

@@ -23,9 +23,6 @@ func newExchange(pairs []*fileListenerPair) *exchange {
 
 // didInherit checks whether exchange contains inherited listeners.
 func (e *exchange) didInherit() bool {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
 	return len(e.inherited) > 0
 }
 
@@ -50,7 +47,7 @@ func (e *exchange) acquireListener(addr *net.TCPAddr) *net.TCPListener {
 			// This socket pair is already acquired.
 			continue
 		}
-		if equalTCPAddr(addr, safeAddrToTCPAddr(pr.l.Addr())) {
+		if equalTCPAddr(addr, pr.l.Addr().(*net.TCPAddr)) {
 			// Acquire the socket pair: move it to the active array
 			e.active = append(e.active, pr.f)
 			e.inherited[i] = nil
@@ -85,6 +82,36 @@ func (e *exchange) activateListener(l *net.TCPListener) error {
 	return nil
 }
 
+// acquireOrCreateListener is a helper function that acquires an inherited
+// listener or creates a new one and adds to an exchange
+func (e *exchange) acquireOrCreateListener(netStr, addrStr string) (*net.TCPListener, error) {
+	addr, err := net.ResolveTCPAddr(netStr, addrStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try to acquire one of inherited listeners.
+	l := e.acquireListener(addr)
+	if l != nil {
+		logger.Printf("ZeroDT: listener '%v' acquired", addr)
+		return l, nil
+	}
+
+	// Create a new TCP listener and add it to an exchange.
+	l, err = net.ListenTCP(netStr, addr)
+	if err != nil {
+		return nil, err
+	}
+	err = e.activateListener(l)
+	if err != nil {
+		l.Close()
+		return nil, err
+	}
+	logger.Printf("ZeroDT: listener '%v' created", addr)
+
+	return l, nil
+}
+
 func equalTCPAddr(l *net.TCPAddr, r *net.TCPAddr) bool {
 	return true &&
 		// Need to match zones,
@@ -92,16 +119,15 @@ func equalTCPAddr(l *net.TCPAddr, r *net.TCPAddr) bool {
 		// ports,
 		l.Port == r.Port &&
 		// and IPs.
-		// Note! The only way to compare IPs directly, is to convert
-		// them to a 16-byte representation form before.
-		bytes.Equal(l.IP.To16(), r.IP.To16())
+		bytes.Equal(normalizeIP(l.IP), normalizeIP(r.IP))
 }
 
-func safeAddrToTCPAddr(a net.Addr) *net.TCPAddr {
-	switch la := a.(type) {
-	case *net.TCPAddr:
-		return la
-	default:
-		panic("Not a TCPAddr!")
+func normalizeIP(ip net.IP) net.IP {
+	// net.IP can be nil after ResolveTCPAddr. The same address
+	if ip == nil {
+		return net.IPv6zero
 	}
+	// Note! The only way to compare IPs directly, is to convert
+	// them to a 16-byte representation form before.
+	return ip.To16()
 }

@@ -11,49 +11,49 @@ import (
 const (
 	// systemd's socket activation environment variables:
 	// Number of provided descriptors.
-	envListenFds = "LISTEN_FDS"
+	envListenFDS = "LISTEN_FDS"
 	// Who should handle socket activation.
-	envListenPid = "LISTEN_PID"
+	envListenPID = "LISTEN_PID"
 
 	// The first passed file descriptor is fd 3.
-	listenFdsStart = 3
+	listenFDSStart = 3
 	// There is no easy way in golang to do separate fork/exec in
 	// order to know child pid. Use this constant instead.
-	listenPidDefault = 0
+	listenPIDDefault = 0
 )
 
 // listenFdsCount returns how many file descriptors have been passed.
 func listenFdsCount() (count int, err error) {
-	pidStr := os.Getenv(envListenPid)
+	pidStr := os.Getenv(envListenPID)
 	// Normal exit - nothing to listen.
 	if pidStr == "" {
 		return
 	}
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
-		err = fmt.Errorf("bad environment variable: %s=%s", envListenPid, pidStr)
+		err = fmt.Errorf("bad environment variable: %s=%s", envListenPID, pidStr)
 		return
 	}
 	// Is this for us?
-	if pid != listenPidDefault && pid != os.Getpid() {
-		err = fmt.Errorf("bad environment variable: %s=%d with pid=%d", envListenPid, pid, os.Getpid())
+	if pid != listenPIDDefault && pid != os.Getpid() {
+		err = fmt.Errorf("bad environment variable: %s=%d with pid=%d", envListenPID, pid, os.Getpid())
 		return
 	}
-	countStr := os.Getenv(envListenFds)
+	countStr := os.Getenv(envListenFDS)
 	if countStr == "" {
-		err = fmt.Errorf("mandatory environment variable does not exist: %s", envListenFds)
+		err = fmt.Errorf("mandatory environment variable does not exist: %s", envListenFDS)
 		return
 	}
 	count, err = strconv.Atoi(countStr)
 	if err != nil {
-		err = fmt.Errorf("bad environment variable: %s=%s", envListenFds, countStr)
+		err = fmt.Errorf("bad environment variable: %s=%s", envListenFDS, countStr)
 		return
 	}
 	if count < 0 {
-		err = fmt.Errorf("bad environment variable: %s=%d", envListenFds, count)
+		err = fmt.Errorf("bad environment variable: %s=%d", envListenFDS, count)
 		return
 	}
-	return count, nil
+	return
 }
 
 // listenFds returns all inherited file descriptors.
@@ -64,20 +64,20 @@ func listenFds() ([]int, error) {
 	}
 	fds := make([]int, count)
 	for i := 0; i < count; i++ {
-		fds[i] = listenFdsStart + i
+		fds[i] = listenFDSStart + i
 	}
 	return fds, nil
 }
 
-func prepareEnv(count int) *[]string {
+func prepareEnv(count int) []string {
 	env := os.Environ()
-	env = append(env, fmt.Sprintf("%s=%d", envListenFds, count))
-	env = append(env, fmt.Sprintf("%s=%d", envListenPid, listenPidDefault))
-	return &env
+	env = append(env, fmt.Sprintf("%s=%d", envListenFDS, count))
+	env = append(env, fmt.Sprintf("%s=%d", envListenPID, listenPIDDefault))
+	return env
 }
 
 func unsetEnvAll() {
 	// Ignore Unsetenv errors.
-	os.Unsetenv(envListenPid)
-	os.Unsetenv(envListenFds)
+	os.Unsetenv(envListenPID)
+	os.Unsetenv(envListenFDS)
 }

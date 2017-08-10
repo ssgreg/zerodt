@@ -140,7 +140,7 @@ func makeSocketFilename(fd int) (string, error) {
 		name = addr.String()
 	case *syscall.SockaddrInet6:
 		// Use zone id instead of zone name, unfortunately `zoneToString` is private in golang.
-		addr := net.TCPAddr{IP: sa.Addr[0:], Port: sa.Port, Zone: fmt.Sprintf("%v", sa.ZoneId)}
+		addr := net.TCPAddr{IP: sa.Addr[0:], Port: sa.Port, Zone: fmt.Sprintf("%d", sa.ZoneId)}
 		name = addr.String()
 	default:
 		return "", fmt.Errorf("unsupported sockaddr type")

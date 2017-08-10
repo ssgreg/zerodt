@@ -5,7 +5,6 @@ package zerodt
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,8 +27,10 @@ type App struct {
 
 // NewApp TODO
 func NewApp(servers ...*http.Server) *App {
+	// @todo: move to Serve
 	inherited, err := inheritedFileListenerPairs()
 	if err != nil {
+		logger.Printf("ZeroDT: failed to inherit listeners with: '%v'", err)
 		panic(err)
 	}
 	e := newExchange(inherited)
@@ -46,7 +47,8 @@ func (a *App) shutdown() {
 	for _, s := range a.servers {
 		go func(s *http.Server) {
 			defer wg.Done()
-			s.Shutdown(context.Background())
+			err := s.Shutdown(context.Background())
+			logger.Printf("ZeroDT: server '%v' is shutdown with %v", s.Addr, err)
 		}(s)
 	}
 
@@ -68,9 +70,9 @@ func (a *App) interceptSignals(ctx context.Context, wg *sync.WaitGroup) {
 			case syscall.SIGINT, syscall.SIGTERM:
 				logger.Printf("ZeroDT: termination signal, shutdown servers...")
 				a.shutdown()
-				return
 
 			case syscall.SIGUSR2:
+				// @TODO: make synchronous
 				logger.Printf("ZeroDT: activation signal, starting another process...")
 				pid, err := a.startAnotherProcess()
 				if err != nil {
@@ -96,6 +98,7 @@ func (a *App) killParent() {
 	}
 
 	logger.Printf("ZeroDT: send termination signal to the parent with pid=%d", os.Getppid())
+	// @TODO: to panic or not
 	err := syscall.Kill(os.Getppid(), syscall.SIGTERM)
 	if err != nil {
 		// It does not allowed running both binaries.
@@ -111,6 +114,9 @@ func (a *App) Serve() error {
 	var sigWG sync.WaitGroup
 	sigWG.Add(1)
 
+	var startWG sync.WaitGroup
+	startWG.Add(len(a.servers))
+
 	sigCtx, cancelFunc := context.WithCancel(context.Background())
 	go a.interceptSignals(sigCtx, &sigWG)
 
@@ -118,7 +124,8 @@ func (a *App) Serve() error {
 		go func(s *http.Server) {
 			defer srvWG.Done()
 
-			l, err := createOrAcquireListener(a.exchange, "tcp", s.Addr)
+			l, err := a.exchange.acquireOrCreateListener("tcp", s.Addr)
+			startWG.Done()
 			if err != nil {
 				// TODO: error channel
 				logger.Printf("ZeroDT: failed to listen on '%v' with %v", s.Addr, err)
@@ -127,10 +134,11 @@ func (a *App) Serve() error {
 
 			err = s.Serve(tcpKeepAliveListener{l})
 			// Serve always returns a non-nil error.
-			logger.Printf("ZeroDT: server '%v' is finished with %v", s.Addr, err)
+			logger.Printf("ZeroDT: server '%v' has finished serving with %v", s.Addr, err)
 		}(s)
 	}
 
+	startWG.Wait()
 	// Kill a parent in case the process was started with inherited sockets.
 	a.killParent()
 
@@ -153,6 +161,7 @@ func (a *App) startAnotherProcess() (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	// @TODO: remove
 	// Fix the path name after the evaluation of any symbolic links.
 	path, err = filepath.EvalSymlinks(path)
 	if err != nil {
@@ -164,7 +173,7 @@ func (a *App) startAnotherProcess() (int, error) {
 	// Start the original executable with the original working directory.
 	process, err := os.StartProcess(path, os.Args, &os.ProcAttr{
 		Dir:   originalWD,
-		Env:   *prepareEnv(len(files)),
+		Env:   prepareEnv(len(files)),
 		Files: append([]*os.File{os.Stdin, os.Stdout, os.Stderr}, files...),
 	})
 	if err != nil {
@@ -172,36 +181,6 @@ func (a *App) startAnotherProcess() (int, error) {
 	}
 
 	return process.Pid, nil
-}
-
-// createOrAcquireListener is a helper function that acquires an inherited
-// listener or creates a new one and adds to an exchange
-func createOrAcquireListener(e *exchange, netStr, addrStr string) (*net.TCPListener, error) {
-	addr, err := net.ResolveTCPAddr(netStr, addrStr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Try to acquire one of inherited listeners.
-	l := e.acquireListener(addr)
-	if l != nil {
-		logger.Printf("ZeroDT: listener with TCPAddr:`%v` has successfully acquired", addr)
-		return l, nil
-	}
-
-	// Create a new TCP listener and add it to an exchange.
-	l, err = net.ListenTCP(netStr, addr)
-	if err != nil {
-		return nil, err
-	}
-	err = e.activateListener(l)
-	if err != nil {
-		l.Close()
-		return nil, err
-	}
-	logger.Printf("ZeroDT: listener with TCPAddr:`%v` has successfully created", addr)
-
-	return l, nil
 }
 
 // formatInherited prints info about inherited listeners to a string.
