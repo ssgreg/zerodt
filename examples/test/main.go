@@ -2,14 +2,12 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"ssgreg/zerodt"
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/gorilla/mux"
 )
 
 func sleep(w http.ResponseWriter, r *http.Request) {
@@ -24,30 +22,23 @@ func sleep(w http.ResponseWriter, r *http.Request) {
 	logrus.Printf("Handled message %d!", os.Getpid())
 }
 
-type childReadyMsg struct {
-	Pid  int `json:"pid"`
-	Data [65520]byte
-	Str  int
-	Str1 string
-}
-
 func main() {
 	zerodt.SetLogger(logrus.StandardLogger())
 
-	r := mux.NewRouter()
-	r.Path("/sleep").Methods("GET").HandlerFunc(sleep)
+	// r := mux.NewRouter()
+	// r.Path("/sleep").Methods("GET").HandlerFunc(sleep)
 
 	// a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: r}, &http.Server{Addr: "127.0.0.1:8082", Handler: r})
 	// a.Serve()
 
-	srv := http.Server{Addr: "127.0.0.1:8081", Handler: r}
+	// srv := http.Server{Addr: "127.0.0.1:8081", Handler: r}
 
-	addr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:8081")
-	l, _ := net.ListenTCP("tcp", addr)
+	// addr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:8081")
+	// l, _ := net.ListenTCP("tcp", addr)
 
 	// err := srv.Shutdown(context.Background())
 	// fmt.Println(err)
-	srv.Serve(l)
+	// srv.Serve(l)
 
 	// var wg sync.WaitGroup
 	// wg.Add(2)

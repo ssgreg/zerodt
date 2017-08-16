@@ -89,13 +89,18 @@ CatchSignals:
 				a.shutdown()
 			// Fork/Exec a child and shutdown.
 			case syscall.SIGUSR2:
-				_, cp, err := forkExec(e.activeFiles())
+				_, f, err := forkExec(e.activeFiles())
 				if err != nil {
 					logger.Printf("ZeroDT: failed to forkExec: '%v'", err)
 					continue CatchSignals
 				}
+				m, err := ListenSocket(f)
+				if err != nil {
+					logger.Printf("ZeroDT: failed to listen communication socket: '%v'", err)
+					continue CatchSignals
+				}
 				// Nothing to do with errors.
-				protocolActAsParent(cp, a.WaitForChildTimeout, func() {
+				protocolActAsParent(m, a.WaitForChildTimeout, func() {
 					a.shutdown()
 				})
 			}
@@ -108,7 +113,7 @@ CatchSignals:
 
 // Serve TODO
 func (a *App) Serve() error {
-	inherited, cp, err := inherit()
+	inherited, m, err := inherit()
 	if err != nil {
 		logger.Printf("ZeroDT: failed to inherit listeners with: '%v'", err)
 		return err
@@ -152,8 +157,8 @@ func (a *App) Serve() error {
 	// Wait for all listeners to start listening.
 	startWG.Wait()
 
-	if cp != nil {
-		protocolActAsChild(cp, a.WaitForParentTimeout)
+	if m != nil {
+		protocolActAsChild(m, a.WaitForParentTimeout)
 	}
 
 	// Allow serverse's goroutines to start serving
@@ -172,7 +177,7 @@ func (a *App) Serve() error {
 
 // forkExec starts another process of youself and passes active
 // listeners to a child to perform socket activation.
-func forkExec(files []*os.File) (int, *PipeJSONMessenger, error) {
+func forkExec(files []*os.File) (int, *os.File, error) {
 	// Get the path name for the executable that started the current process.
 	path, err := os.Executable()
 	if err != nil {
@@ -185,15 +190,14 @@ func forkExec(files []*os.File) (int, *PipeJSONMessenger, error) {
 		return -1, nil, err
 	}
 
-	cr, cw, err := os.Pipe()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return -1, nil, err
 	}
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return -1, nil, err
-	}
-	files = append(files, cr, pw)
+	f0 := os.NewFile(uintptr(fds[0]), "s|0")
+	f1 := os.NewFile(uintptr(fds[1]), "s|0")
+
+	files = append(files, f1)
 
 	// Start the original executable with the original working directory.
 	process, err := os.StartProcess(path, os.Args, &os.ProcAttr{
@@ -205,7 +209,7 @@ func forkExec(files []*os.File) (int, *PipeJSONMessenger, error) {
 		return -1, nil, err
 	}
 
-	return process.Pid, ListenPipe(pr, cw), nil
+	return process.Pid, f0, nil
 }
 
 // formatInherited prints info about inherited listeners to a string.
@@ -221,7 +225,7 @@ func formatInherited(e *exchange) string {
 	return result
 }
 
-func protocolActAsParent(m *PipeJSONMessenger, timeout time.Duration, shutdownFn func()) error {
+func protocolActAsParent(m *StreamMessenger, timeout time.Duration, shutdownFn func()) error {
 	defer m.Close()
 	// Set a timeout for the whole dialog.
 	m.SetDeadline(time.Now().Add(timeout))
@@ -248,7 +252,7 @@ func protocolActAsParent(m *PipeJSONMessenger, timeout time.Duration, shutdownFn
 	return nil
 }
 
-func protocolActAsChild(m *PipeJSONMessenger, timeout time.Duration) {
+func protocolActAsChild(m *StreamMessenger, timeout time.Duration) {
 	defer m.Close()
 	// Child->Parent, ready message
 	logger.Printf("ZeroDT: sending ready to a parent...")

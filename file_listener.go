@@ -47,7 +47,7 @@ type fileListenerPair struct {
 // inherit returns all inherited listeners with
 // duplicated file descriptors wrapped in os.File.
 // Can be called only once.
-func inherit() ([]*fileListenerPair, *PipeJSONMessenger, error) {
+func inherit() ([]*fileListenerPair, *StreamMessenger, error) {
 	// Are there some listeners to inherit?
 	fds, err := listenFds()
 	if err != nil {
@@ -61,13 +61,13 @@ func inherit() ([]*fileListenerPair, *PipeJSONMessenger, error) {
 	return pairs, cp, nil
 }
 
-func inheritWithFDS(fds []int) ([]*fileListenerPair, *PipeJSONMessenger, error) {
+func inheritWithFDS(fds []int) ([]*fileListenerPair, *StreamMessenger, error) {
 	m, err := listenPipeWithFDS(fds)
 	if err != nil {
 		return nil, nil, err
 	}
 	if m != nil {
-		fds = fds[0 : len(fds)-2]
+		fds = fds[0 : len(fds)-1]
 	}
 	// Start to listen them.
 	pairs := make([]*fileListenerPair, len(fds))
@@ -85,23 +85,20 @@ func inheritWithFDS(fds []int) ([]*fileListenerPair, *PipeJSONMessenger, error) 
 	return pairs, m, nil
 }
 
-func listenPipeWithFDS(fds []int) (*PipeJSONMessenger, error) {
+func listenPipeWithFDS(fds []int) (*StreamMessenger, error) {
 	count := len(fds)
-	if count > 1 {
+	if count > 0 {
 		ok, err := isSocketTCP(fds[count-1])
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			ok, err := isSocketTCP(fds[count-2])
+			s := os.NewFile(uintptr(fds[count-1]), "s|0")
+			m, err := ListenSocket(s)
 			if err != nil {
 				return nil, err
 			}
-			if !ok {
-				r := os.NewFile(uintptr(fds[count-2]), "|0")
-				w := os.NewFile(uintptr(fds[count-1]), "|1")
-				return ListenPipe(r, w), nil
-			}
+			return m, nil
 		}
 	}
 	return nil, nil
@@ -150,6 +147,15 @@ func isSocketTCP(fd int) (bool, error) {
 		return false, err
 	}
 	if socketType != syscall.SOCK_STREAM {
+		return false, nil
+	}
+	lsa, err := syscall.Getsockname(fd)
+	if err != nil {
+		return false, err
+	}
+
+	switch lsa.(type) {
+	case *syscall.SockaddrUnix:
 		return false, nil
 	}
 	return true, nil

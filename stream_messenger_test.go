@@ -3,12 +3,16 @@
 package zerodt
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,14 +22,17 @@ type testMsg struct {
 	Binary [35000]byte
 }
 
-func TestPipeJSONMessenger(t *testing.T) {
-	r1, w1, err := os.Pipe()
+func TestPipeMessenger(t *testing.T) {
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	require.NoError(t, err)
-	r2, w2, err := os.Pipe()
+	f0 := os.NewFile(uintptr(fds[0]), "s|0")
+	f1 := os.NewFile(uintptr(fds[1]), "s|1")
+
+	m0, err := ListenSocket(f0)
 	require.NoError(t, err)
-	m := ListenPipe(r1, w2)
-	defer func() { require.NoError(t, m.Close()) }()
-	m1 := ListenPipe(r2, w1)
+	defer func() { require.NoError(t, m0.Close()) }()
+	m1, err := ListenSocket(f1)
+	require.NoError(t, err)
 	defer func() { require.NoError(t, m1.Close()) }()
 
 	var wg sync.WaitGroup
@@ -37,10 +44,10 @@ func TestPipeJSONMessenger(t *testing.T) {
 		msg1 := testMsg{Int: 66, String: "Piped JSON"}
 		msg1.Binary[0] = 42
 		msg1.Binary[len(msg1.Binary)-1] = 43
-		require.NoError(t, m.Send(msg1))
+		require.NoError(t, m0.Send(msg1))
 
 		msg2 := testMsg{}
-		require.NoError(t, m.Recv(&msg2))
+		require.NoError(t, m0.Recv(&msg2))
 		assert.EqualValues(t, 77, msg2.Int)
 		assert.Equal(t, "Piped JSON from Client", msg2.String)
 		assert.EqualValues(t, 82, msg2.Binary[0])
@@ -49,10 +56,10 @@ func TestPipeJSONMessenger(t *testing.T) {
 		msg3 := testMsg{Int: 166, String: "Piped JSON again"}
 		msg3.Binary[0] = 142
 		msg3.Binary[len(msg3.Binary)-1] = 143
-		require.NoError(t, m.Send(msg3))
+		require.NoError(t, m0.Send(msg3))
 
 		msg4 := testMsg{}
-		require.NoError(t, m.Recv(&msg4))
+		require.NoError(t, m0.Recv(&msg4))
 		assert.EqualValues(t, 177, msg4.Int)
 		assert.Equal(t, "Piped JSON again from Client", msg4.String)
 		assert.EqualValues(t, 182, msg4.Binary[0])
@@ -61,6 +68,7 @@ func TestPipeJSONMessenger(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
+		defer fmt.Println("Recv")
 
 		msg1 := testMsg{}
 		require.NoError(t, m1.Recv(&msg1))
@@ -91,17 +99,27 @@ func TestPipeJSONMessenger(t *testing.T) {
 }
 
 func TestPipeJSONMessengerWithDeadlinePartlySuccess(t *testing.T) {
-	r1, w1, err := os.Pipe()
+	// workaround for darwin, something bad happens is file descriptors are reuses
+	fdsTemp, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	require.NoError(t, err)
-	r2, w2, err := os.Pipe()
-	require.NoError(t, err)
-	m := ListenPipe(r1, w2)
-	defer func() { require.Error(t, m.Close()) }()
-	m1 := ListenPipe(r2, w1)
-	defer func() { require.Error(t, m1.Close()) }()
+	defer syscall.Close(fdsTemp[0])
+	defer syscall.Close(fdsTemp[1])
+	// end workaround
 
-	m.SetDeadline(time.Now().Add(time.Millisecond * 400))
-	m1.SetDeadline(time.Now().Add(time.Millisecond * 400))
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	require.NoError(t, err)
+	f0 := os.NewFile(uintptr(fds[0]), "s|0")
+	f1 := os.NewFile(uintptr(fds[1]), "s|1")
+
+	m0, err := ListenSocket(f0)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, m0.Close()) }()
+	m1, err := ListenSocket(f1)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, m1.Close()) }()
+
+	m0.SetDeadline(time.Now().Add(time.Millisecond * 2000))
+	m1.SetDeadline(time.Now().Add(time.Millisecond * 2000))
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -112,15 +130,15 @@ func TestPipeJSONMessengerWithDeadlinePartlySuccess(t *testing.T) {
 		msg1 := testMsg{Int: 66, String: "Piped JSON"}
 		msg1.Binary[0] = 42
 		msg1.Binary[len(msg1.Binary)-1] = 43
-		require.NoError(t, m.Send(msg1))
+		require.NoError(t, m0.Send(msg1))
 
-		require.Equal(t, ErrTimeout, m.Send(msg1))
+		require.Equal(t, true, m0.Send(msg1).(*net.OpError).Timeout())
 	}()
 
 	go func() {
 		defer wg.Done()
 
-		time.Sleep(time.Millisecond * 200)
+		time.Sleep(time.Millisecond * 1000)
 		msg1 := testMsg{}
 		require.NoError(t, m1.Recv(&msg1))
 		assert.EqualValues(t, 66, msg1.Int)
@@ -128,20 +146,22 @@ func TestPipeJSONMessengerWithDeadlinePartlySuccess(t *testing.T) {
 		assert.EqualValues(t, 42, msg1.Binary[0])
 		assert.EqualValues(t, 43, msg1.Binary[len(msg1.Binary)-1])
 
-		time.Sleep(time.Millisecond * 200)
-		require.Equal(t, ErrTimeout, m1.Recv(msg1))
+		time.Sleep(time.Millisecond * 1000)
+		require.Equal(t, true, m1.Recv(msg1).(*net.OpError).Timeout())
 	}()
 
 	wg.Wait()
 }
 
 func TestPipeJSONMessengerWithDeadlineFailWithWriter(t *testing.T) {
-	r, w, err := os.Pipe()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	require.NoError(t, err)
-	m := ListenPipe(r, w)
-	defer func() { require.Error(t, m.Close()) }()
+	f0 := os.NewFile(uintptr(fds[0]), "s|0")
 
-	m.SetDeadline(time.Now().Add(time.Millisecond * 300))
+	m0, err := ListenSocket(f0)
+	require.NoError(t, err)
+
+	m0.SetWriteDeadline(time.Now().Add(time.Millisecond * 300))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -150,19 +170,21 @@ func TestPipeJSONMessengerWithDeadlineFailWithWriter(t *testing.T) {
 		defer wg.Done()
 
 		msg1 := testMsg{}
-		require.Equal(t, ErrTimeout, m.Send(msg1))
+		require.Equal(t, true, m0.Send(msg1).(*net.OpError).Timeout())
 	}()
 
 	wg.Wait()
 }
 
 func TestPipeJSONMessengerWithDeadlineFailWithRead(t *testing.T) {
-	r, w, err := os.Pipe()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	require.NoError(t, err)
-	m := ListenPipe(r, w)
-	defer func() { require.Error(t, m.Close()) }()
+	f0 := os.NewFile(uintptr(fds[0]), "s|0")
 
-	m.SetDeadline(time.Now().Add(time.Millisecond * 300))
+	m0, err := ListenSocket(f0)
+	require.NoError(t, err)
+
+	m0.SetReadDeadline(time.Now().Add(time.Millisecond * 300))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -171,7 +193,7 @@ func TestPipeJSONMessengerWithDeadlineFailWithRead(t *testing.T) {
 		defer wg.Done()
 
 		msg1 := testMsg{}
-		require.Equal(t, ErrTimeout, m.Recv(msg1))
+		require.Equal(t, true, m0.Recv(msg1).(*net.OpError).Timeout())
 	}()
 
 	wg.Wait()
