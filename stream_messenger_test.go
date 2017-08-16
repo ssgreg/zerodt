@@ -151,29 +151,6 @@ func TestPipeJSONMessengerWithDeadlinePartlySuccess(t *testing.T) {
 	wg.Wait()
 }
 
-func TestPipeJSONMessengerWithDeadlineFailWithWriter(t *testing.T) {
-	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
-	require.NoError(t, err)
-	f0 := os.NewFile(uintptr(fds[0]), "s|0")
-
-	m0, err := ListenSocket(f0)
-	require.NoError(t, err)
-
-	m0.SetWriteDeadline(time.Now().Add(time.Millisecond * 300))
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-
-		msg1 := testMsg{}
-		require.Equal(t, true, m0.Send(msg1).(*net.OpError).Timeout())
-	}()
-
-	wg.Wait()
-}
-
 func TestPipeJSONMessengerWithDeadlineFailWithRead(t *testing.T) {
 	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	require.NoError(t, err)
