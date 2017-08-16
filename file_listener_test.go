@@ -15,7 +15,7 @@ import (
 
 func TestInheritedFileListenerPairs(t *testing.T) {
 	setEnv("", "")
-	pairs, err := inheritedFileListenerPairs()
+	pairs, _, err := inherit()
 	require.NoError(t, err)
 	assert.Empty(t, pairs)
 }
@@ -24,7 +24,7 @@ func TestCreateFileListenerPairs(t *testing.T) {
 	fd := newSocketTCP(t)
 	defer closeFD(t, fd)
 
-	pairs, err := createFileListenerPairs([]int{fd})
+	pairs, _, err := inheritWithFDS([]int{fd})
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(pairs))
 	assert.NotNil(t, pairs[0].f)

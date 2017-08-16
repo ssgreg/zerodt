@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -48,19 +49,25 @@ type run struct {
 
 func newRun(t *testing.T, port int) *run {
 	client := http.Client{
-		Transport: &http.Transport{IdleConnTimeout: time.Second * 3},
+		Transport: &http.Transport{IdleConnTimeout: time.Second * 5, MaxIdleConnsPerHost: 70},
 	}
 	setEnv("", "")
 	return &run{t: t, client: &client, port: strconv.Itoa(port)}
 }
 
-func (d *run) start() {
+func (d *run) start(waitForParent bool) {
 	fmt.Println("===== start")
 
 	d.swg.Add(1)
 
+	args := make([]string, 0)
+	args = append(args, "-port", d.port)
+	if waitForParent {
+		args = append(args, "-waitForParent")
+	}
+
 	// Start an http server.
-	cmd := exec.Command(os.Args[0], "-port", d.port)
+	cmd := exec.Command(os.Args[0], args...)
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(d.t, err)
 	err = cmd.Start()
@@ -79,8 +86,10 @@ func (d *run) start() {
 }
 
 func (d *run) waitForProcess(retryErrors bool) {
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 1000; i++ {
+		fmt.Println("===== ping")
 		r, err := d.client.Get("http://localhost:" + d.port)
+		fmt.Println("===== pong")
 		if err != nil {
 			if retryErrors {
 				time.Sleep(time.Millisecond * 100)
@@ -103,10 +112,10 @@ func (d *run) waitForProcess(retryErrors bool) {
 	d.t.Fatal("Process is not started!")
 }
 
-func sendMessage(t *testing.T, wg *sync.WaitGroup, client *http.Client, port string, delay, pid int) {
+func sendMessage(t *testing.T, wg *sync.WaitGroup, client *http.Client, port string, delay, id, pid int) {
 	defer wg.Done()
 
-	r, err := client.Get(fmt.Sprintf("http://localhost:%s/sleep?duration=%ds", port, delay))
+	r, err := client.Get(fmt.Sprintf("http://localhost:%s/sleep?duration=%dms&pid=%d&id=%d", port, delay, pid, id))
 	fmt.Println("===== request finished")
 	require.NoError(t, err)
 	body, err := ioutil.ReadAll(r.Body)
@@ -116,19 +125,59 @@ func sendMessage(t *testing.T, wg *sync.WaitGroup, client *http.Client, port str
 	assert.Equal(t, pid, pidNew)
 }
 
+func sendMessage2(t *testing.T, wg *sync.WaitGroup, client *http.Client, port string, ch chan int, delay, id, pid int) {
+	defer wg.Done()
+
+	r, err := client.Get(fmt.Sprintf("http://localhost:%s/sleep?duration=%dms&pid=%d&id=%d", port, delay, pid, id))
+	fmt.Println("===== request finished")
+	require.NoError(t, err)
+	body, err := ioutil.ReadAll(r.Body)
+	require.NoError(t, err)
+	pidNew, err := strconv.Atoi(string(body))
+	require.NoError(t, err)
+	assert.Equal(t, pid, pidNew)
+	ch <- id
+}
+
+var counter int32
+
+func sendMessage1(t *testing.T, client *http.Client, port string, delay, pid int) {
+	myCounter := atomic.AddInt32(&counter, 1)
+
+	uri := fmt.Sprintf("http://localhost:%s/sleep?duration=%dms&counter=%d", port, delay, myCounter)
+
+	fmt.Println("========== started", uri)
+	r, err := client.Get(uri)
+	fmt.Println("========== finished", uri)
+	require.NoError(t, err)
+	_, err = ioutil.ReadAll(r.Body)
+	require.NoError(t, err)
+}
+
 func (d *run) send() {
 	fmt.Println("===== send")
 
 	d.swg.Add(2)
 
-	go sendMessage(d.t, &d.swg, d.client, d.port, 0, d.lastProcess().Pid)
-	go sendMessage(d.t, &d.swg, d.client, d.port, 3, d.lastProcess().Pid)
+	go sendMessage(d.t, &d.swg, d.client, d.port, 0, 0, d.lastProcess().Pid)
+	go sendMessage(d.t, &d.swg, d.client, d.port, 300, 0, d.lastProcess().Pid)
+	time.Sleep(time.Millisecond * 1)
+}
+
+func (d *run) sendWithID(ch chan int, short, long, longTimeout int) {
+	fmt.Println("===== send")
+
+	d.swg.Add(2)
+
+	go sendMessage2(d.t, &d.swg, d.client, d.port, ch, 0, short, d.lastProcess().Pid)
+	go sendMessage2(d.t, &d.swg, d.client, d.port, ch, longTimeout, long, d.lastProcess().Pid)
 	time.Sleep(time.Millisecond * 1)
 }
 
 func (d *run) stop() {
 	fmt.Println("===== stop")
 
+	time.Sleep(time.Second)
 	require.NoError(d.t, d.lastProcess().Signal(syscall.SIGTERM))
 }
 
@@ -151,34 +200,91 @@ func (d *run) lastProcess() *os.Process {
 	return d.processes[l-1]
 }
 
-func TestTrippleRestart(t *testing.T) {
-	t.Parallel()
+func TestTrippleRestartStatefull(t *testing.T) {
 	d := newRun(t, 2606)
-	d.start()
-	d.send()
+
+	ch := make(chan int, 100)
+
+	d.start(true)
+	d.sendWithID(ch, 0, 1, 2000)
 	d.restart()
-	d.send()
+	d.sendWithID(ch, 0, 1, 2000)
 	d.restart()
-	d.send()
+	d.sendWithID(ch, 0, 1, 2000)
 	d.restart()
-	d.send()
+	d.sendWithID(ch, 0, 1, 2000)
 	d.stop()
 	d.wait()
+
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 1, <-ch)
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 1, <-ch)
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 1, <-ch)
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 1, <-ch)
 }
 
-func TestOneMoreTrippleRestart(t *testing.T) {
-	t.Parallel()
+// func TestHighLoad(t *testing.T) {
+// 	t.Parallel()
+// 	d := newRun(t, 2606)
+
+// 	d.start(false)
+
+// 	var wg sync.WaitGroup
+
+// 	for i := 0; i < 100; i++ {
+// 		wg.Add(1)
+
+// 		go func() {
+// 			defer wg.Done()
+
+// 			deadline := time.Now().Add(time.Second * 9)
+// 			for time.Now().Sub(deadline) < 0 {
+// 				sendMessage1(d.t, d.client, d.port, 0, d.lastProcess().Pid)
+// 			}
+// 		}()
+// 	}
+
+// 	for i := 0; i < 40; i++ {
+// 		time.Sleep(time.Millisecond * 100)
+// 		d.restart()
+// 		d.send()
+// 	}
+// 	// time.Sleep(time.Second * 15)
+
+// 	wg.Wait()
+
+// 	time.Sleep(time.Second * 1)
+// 	d.stop()
+// 	d.wait()
+// }
+
+func TestTrippleRestartStateless(t *testing.T) {
 	d := newRun(t, 2607)
-	d.start()
-	d.send()
+
+	ch := make(chan int, 100)
+
+	d.start(false)
+	d.sendWithID(ch, 0, 1, 5000)
 	d.restart()
-	d.send()
+	d.sendWithID(ch, 0, 1, 5000)
 	d.restart()
-	d.send()
+	d.sendWithID(ch, 0, 1, 5000)
 	d.restart()
-	d.send()
+	d.sendWithID(ch, 0, 1, 5000)
 	d.stop()
 	d.wait()
+
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 0, <-ch)
+	require.Equal(t, 1, <-ch)
+	require.Equal(t, 1, <-ch)
+	require.Equal(t, 1, <-ch)
+	require.Equal(t, 1, <-ch)
 }
 
 //
@@ -187,25 +293,32 @@ func TestOneMoreTrippleRestart(t *testing.T) {
 
 func root(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%d", os.Getpid())
+	logger.Printf("Handled root %d", os.Getpid())
 }
 
 func sleep(w http.ResponseWriter, r *http.Request) {
+	logger.Printf("Ready to handle message %s", r.RequestURI)
+
 	duration, err := time.ParseDuration(r.FormValue("duration"))
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 	}
 
 	time.Sleep(duration)
-	fmt.Fprintf(w, "%d", os.Getpid())
-	logger.Printf("Handled message %d:%d", duration, os.Getpid())
+	_, err = fmt.Fprintf(w, "%d", os.Getpid())
+	logger.Printf("Handled message %s, %v", r.RequestURI, err)
 }
 
 func startHTTPServer() {
-	SetLogger(log.New(os.Stdout, "", log.LstdFlags))
+	SetLogger(log.New(os.Stdout, fmt.Sprintf("[%d] ", os.Getpid()), log.LstdFlags))
 
 	var port string
+	var waitForParent bool
 	flag.StringVar(&port, "port", "2607", "a port to bind to")
+	flag.BoolVar(&waitForParent, "waitForParent", false, "wait for parent before start serving (statefull)")
 	flag.Parse()
+
+	logger.Printf("Server started on port=%s with waitForParent=%v\n", port, waitForParent)
 
 	r := mux.NewRouter()
 	r.Path("/").Methods("GET").HandlerFunc(root)
@@ -213,14 +326,19 @@ func startHTTPServer() {
 
 	// Force timeout. 10 seconds is enough.
 	go func() {
-		time.Sleep(time.Second * 10)
+		time.Sleep(time.Second * 300)
 		p, err := os.FindProcess(os.Getpid())
-		logger.Printf("Timeout: kill %v", p.Pid)
+		logger.Printf("Timeout: kill %v\n", p.Pid)
 		if err == nil {
 			p.Kill()
 		}
 	}()
 
 	a := NewApp(&http.Server{Addr: ":" + port, Handler: r})
+	if waitForParent {
+		a.WaitForParentTimeout = time.Second * 360
+	}
 	a.Serve()
+
+	logger.Printf("Server finished")
 }

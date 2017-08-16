@@ -25,7 +25,7 @@ var (
 	logger StdLogger = log.New(ioutil.Discard, "", 0)
 )
 
-// SetLogger allows to set a different logger that compatible with StdLogger
+// SetLogger allows to set a different logger that is compatible with StdLogger
 // interface. Tested with stdlib logger:
 //
 //   log.New(os.Stderr, "", log.LstdFlags)

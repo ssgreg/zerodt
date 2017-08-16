@@ -44,38 +44,67 @@ type fileListenerPair struct {
 	f *os.File
 }
 
-// inheritedFileListenerPairs returns all inherited listeners with
+// inherit returns all inherited listeners with
 // duplicated file descriptors wrapped in os.File.
-// Can be called only once. Returns an empty list afterwards.
-func inheritedFileListenerPairs() ([]*fileListenerPair, error) {
+// Can be called only once.
+func inherit() ([]*fileListenerPair, *PipeJSONMessenger, error) {
 	// Are there some listeners to inherit?
 	fds, err := listenFds()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	pairs, err := createFileListenerPairs(fds)
+	pairs, cp, err := inheritWithFDS(fds)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	unsetEnvAll()
-	return pairs, nil
+	return pairs, cp, nil
 }
 
-func createFileListenerPairs(fds []int) ([]*fileListenerPair, error) {
+func inheritWithFDS(fds []int) ([]*fileListenerPair, *PipeJSONMessenger, error) {
+	m, err := listenPipeWithFDS(fds)
+	if err != nil {
+		return nil, nil, err
+	}
+	if m != nil {
+		fds = fds[0 : len(fds)-2]
+	}
 	// Start to listen them.
 	pairs := make([]*fileListenerPair, len(fds))
 	for i, fd := range fds {
 		f, err := newFileOnSocket(fd)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		l, err := newFileTCPListener(f)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		pairs[i] = &fileListenerPair{l, f}
 	}
-	return pairs, nil
+	return pairs, m, nil
+}
+
+func listenPipeWithFDS(fds []int) (*PipeJSONMessenger, error) {
+	count := len(fds)
+	if count > 1 {
+		ok, err := isSocketTCP(fds[count-1])
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			ok, err := isSocketTCP(fds[count-2])
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				r := os.NewFile(uintptr(fds[count-2]), "|0")
+				w := os.NewFile(uintptr(fds[count-1]), "|1")
+				return ListenPipe(r, w), nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // Set socket options, to make sure a socket is the same as golang

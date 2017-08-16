@@ -13,7 +13,6 @@ type App struct {
 
 // NewApp TODO
 func NewApp(servers ...*http.Server) *App {
-	logger.Printf("ZeroDT: started for pid=%d without inherited")
 	return &App{servers}
 }
 
