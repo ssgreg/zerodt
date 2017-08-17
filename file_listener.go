@@ -62,7 +62,7 @@ func inherit() ([]*fileListenerPair, *StreamMessenger, error) {
 }
 
 func inheritWithFDS(fds []int) ([]*fileListenerPair, *StreamMessenger, error) {
-	m, err := listenPipeWithFDS(fds)
+	m, err := getMessengerWithFDS(fds)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -85,7 +85,7 @@ func inheritWithFDS(fds []int) ([]*fileListenerPair, *StreamMessenger, error) {
 	return pairs, m, nil
 }
 
-func listenPipeWithFDS(fds []int) (*StreamMessenger, error) {
+func getMessengerWithFDS(fds []int) (*StreamMessenger, error) {
 	count := len(fds)
 	if count > 0 {
 		ok, err := isSocketTCP(fds[count-1])
@@ -130,7 +130,7 @@ func setDefaultGoSocketOptions(fd int) error {
 
 // isSocketTCP checks if passed file descriptor is a TCP socket
 func isSocketTCP(fd int) (bool, error) {
-	// check S_IFSOCK flag
+	// Check S_IFSOCK flag.
 	var st syscall.Stat_t
 	err := syscall.Fstat(fd, &st)
 	if err != nil {
@@ -141,7 +141,7 @@ func isSocketTCP(fd int) (bool, error) {
 	default:
 		return false, nil
 	}
-	// check SOCK_STREAM option
+	// Check SOCK_STREAM option.
 	socketType, err := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_TYPE)
 	if err != nil {
 		return false, err
@@ -149,11 +149,11 @@ func isSocketTCP(fd int) (bool, error) {
 	if socketType != syscall.SOCK_STREAM {
 		return false, nil
 	}
+	// Check is it Unix socket.
 	lsa, err := syscall.Getsockname(fd)
 	if err != nil {
 		return false, err
 	}
-
 	switch lsa.(type) {
 	case *syscall.SockaddrUnix:
 		return false, nil

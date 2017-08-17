@@ -336,7 +336,7 @@ func startHTTPServer() {
 
 	a := NewApp(&http.Server{Addr: ":" + port, Handler: r})
 	if waitForParent {
-		a.WaitForParentTimeout = time.Second * 360
+		a.SetWaitParentShutdownTimeout(time.Second * 360)
 	}
 	a.Serve()
 

@@ -5,6 +5,7 @@ package zerodt
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,25 +23,53 @@ var (
 
 // App TODO
 type App struct {
-	served               sync.WaitGroup
-	servers              []*http.Server
-	WaitForParentTimeout time.Duration
-	WaitForChildTimeout  time.Duration
-}
-
-type readyMsg struct {
-	SendConfirmation bool
-}
-
-type shutdownConfirmationMsg struct {
+	served                    sync.WaitGroup
+	servers                   []*http.Server
+	waitParentShutdownTimeout time.Duration
+	waitChildTimeout          time.Duration
 }
 
 // NewApp TODO
 func NewApp(servers ...*http.Server) *App {
-	a := &App{servers: servers, WaitForParentTimeout: 0, WaitForChildTimeout: time.Second * 60}
+	a := &App{
+		servers:                   servers,
+		waitParentShutdownTimeout: 0,
+		waitChildTimeout:          time.Second * 60,
+	}
 	// Need to be sure all servers are serving before calling shutdown.
 	a.served.Add(len(a.servers))
 	return a
+}
+
+// SetWaitChildTimeout sets the maximum amount of time for a parent
+// to wait for a child when activation is started. It is reset whenever
+// a new activation process is started.
+//
+// When the timeout ends, the activating child will be killed with
+// no regrets. The activation prosess will be stopped in this case.
+//
+// There is only one reason to tune this timeout - if the app is
+// starting for a long time.
+//
+// Default value is 60 seconds.
+func (a *App) SetWaitChildTimeout(d time.Duration) {
+	a.waitChildTimeout = d
+}
+
+// SetWaitParentShutdownTimeout sets the maximum amount of time for a
+// child to wait for a parent shutdown when activation is started. It
+// is reset whenever a new activation process is started.
+//
+// When the timeout ends (if it is not 0), the activated child will
+// kill his parent.
+//
+// The timeout is usable for statefull services and basically describes
+// maxim amount of time for a single request handling by a parent.
+//
+// Default value is 0 that means no timeout. A child will start
+// accepting new connections immediately.
+func (a *App) SetWaitParentShutdownTimeout(d time.Duration) {
+	a.waitParentShutdownTimeout = d
 }
 
 // synchronous
@@ -100,16 +129,13 @@ CatchSignals:
 					continue CatchSignals
 				}
 				// Nothing to do with errors.
-				protocolActAsParent(m, a.WaitForChildTimeout, func() {
+				protocolActAsParent(m, a.waitChildTimeout, a.waitParentShutdownTimeout, func() {
 					a.shutdown()
 				})
 			}
 		}
 	}
 }
-
-// TODO: think
-// - Race condition with sending SIGUSR2 before interceptSignals is starting (need to impelemt sync script for systemd that waits for the new app using http calls or pid)
 
 // Serve TODO
 func (a *App) Serve() error {
@@ -137,6 +163,8 @@ func (a *App) Serve() error {
 	var parentWG sync.WaitGroup
 	parentWG.Add(1)
 
+	var finalErr error
+
 	for _, s := range a.servers {
 		go func(s *http.Server) {
 			defer srvWG.Done()
@@ -148,7 +176,10 @@ func (a *App) Serve() error {
 				return
 			}
 			parentWG.Wait()
-
+			if finalErr != nil {
+				logger.Printf("ZeroDT: server '%v' has finished serving with %v", s.Addr, err)
+				return
+			}
 			err = s.Serve(&notifyListener{Listener: tcpKeepAliveListener{l}, wg: &a.served})
 			logger.Printf("ZeroDT: server '%v' has finished serving with %v", s.Addr, err)
 		}(s)
@@ -158,7 +189,7 @@ func (a *App) Serve() error {
 	startWG.Wait()
 
 	if m != nil {
-		protocolActAsChild(m, a.WaitForParentTimeout)
+		finalErr = protocolActAsChild(m, a.waitChildTimeout, a.waitParentShutdownTimeout)
 	}
 
 	// Allow serverse's goroutines to start serving
@@ -172,7 +203,7 @@ func (a *App) Serve() error {
 	sigCancelFunc()
 	sigWG.Wait()
 
-	return nil
+	return finalErr
 }
 
 // forkExec starts another process of youself and passes active
@@ -225,53 +256,121 @@ func formatInherited(e *exchange) string {
 	return result
 }
 
-func protocolActAsParent(m *StreamMessenger, timeout time.Duration, shutdownFn func()) error {
+type readyMsg struct {
+	WaitParentShutdownTimeout time.Duration
+}
+
+type readyConfirmationMsg struct {
+	FixedWaitParentShutdownTimeout time.Duration
+}
+
+type shutdownConfirmationMsg struct {
+}
+
+const (
+	// Const timeout for Send operations.
+	//
+	// Socket buffer is big enough to keep our micro messages. So there
+	// is no need to use long timeouts.
+	sendTimeout = time.Second * 20
+)
+
+func maxTimeout(l time.Duration, r time.Duration) time.Duration {
+	if l >= r {
+		return l
+	}
+	return r
+}
+
+func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, waitParentShutdownTimeout time.Duration, shutdownFn func()) error {
 	defer m.Close()
-	// Set a timeout for the whole dialog.
-	m.SetDeadline(time.Now().Add(timeout))
+	// Set deadline for ready/confirmation
+	m.SetDeadline(time.Now().Add(waitChildTimeout))
 	// Child->Parent, ready message
-	logger.Printf("ZeroDT: waiting for child to start (ready signal)...")
+	logger.Printf("ZeroDT: waiting for readyMsg...")
 	r := readyMsg{}
 	err := m.Recv(&r)
 	if err != nil {
 		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		// The child will die by timout.
+		return err
+	}
+	// Parent->Child, ready confirmation message
+	logger.Printf("ZeroDT: sending readyConfirmationMsg to the child...")
+	tipTimeout := maxTimeout(r.WaitParentShutdownTimeout, waitParentShutdownTimeout)
+	err = m.Send(readyConfirmationMsg{FixedWaitParentShutdownTimeout: tipTimeout})
+	if err != nil {
+		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		// The child will die by timout.
 		return err
 	}
 	// Shutdown callback.
 	shutdownFn()
-	// Parent->Child, confirmation message
-	if !r.SendConfirmation {
+	// Parent->Child, shutdown confirmation message
+	if tipTimeout == 0 {
 		return nil
 	}
-	logger.Printf("ZeroDT: sending confirmation to child...")
+	logger.Printf("ZeroDT: sending shutdownConfirmationMsg to the child...")
+	m.SetDeadline(time.Now().Add(sendTimeout))
 	err = m.Send(shutdownConfirmationMsg{})
 	if err != nil {
 		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
-		return err
+		// Ball is in child's court now. Not an error for shutdown.
 	}
 	return nil
 }
 
-func protocolActAsChild(m *StreamMessenger, timeout time.Duration) {
+func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, waitParentShutdownTimeout time.Duration) error {
 	defer m.Close()
 	// Child->Parent, ready message
-	logger.Printf("ZeroDT: sending ready to a parent...")
-	m.SetDeadline(time.Now().Add(time.Second * 5))
-	err := m.Send(readyMsg{SendConfirmation: timeout != 0})
+	logger.Printf("ZeroDT: sending readyMsg to the parent...")
+	m.SetDeadline(time.Now().Add(sendTimeout))
+	err := m.Send(readyMsg{WaitParentShutdownTimeout: waitParentShutdownTimeout})
 	if err != nil {
 		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
-		return
+		return err
 	}
-	if timeout == 0 {
-		return
-	}
-	// Parent->Child, confirmed message
-	logger.Printf("ZeroDT: waiting for parent to shutdown...")
-	r := shutdownConfirmationMsg{}
-	m.SetDeadline(time.Now().Add(timeout))
-	err = m.Recv(&r)
+	// Parent->Child, ready confirmation message
+	logger.Printf("ZeroDT: waiting for readyConfirmationMsg...")
+	rcr := readyConfirmationMsg{}
+	m.SetDeadline(time.Now().Add(maxTimeout(waitChildTimeout, waitParentShutdownTimeout)))
+	err = m.Recv(&rcr)
 	if err != nil {
 		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
-		return
+		return err
 	}
+
+	if rcr.FixedWaitParentShutdownTimeout == 0 {
+		return nil
+	}
+	// Parent->Child, shutdown confirmation message
+	logger.Printf("ZeroDT: waiting for shutdownConfirmationMsg...")
+	scr := shutdownConfirmationMsg{}
+	m.SetDeadline(time.Now().Add(rcr.FixedWaitParentShutdownTimeout))
+	err = m.Recv(&scr)
+	if err != nil {
+		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		if opErr, ok := err.(*net.OpError); ok {
+			if opErr.Timeout() {
+				// Ball is in our court now. There are issues on parent's
+				// side probably. Need to kill parent.
+				parentPID, err := killParent()
+				logger.Printf("ZeroDT: parent %d was killed with: '%v'", parentPID, err)
+				return nil
+			}
+		}
+		return err
+	}
+	// Everything is Ok.
+	return nil
+}
+
+func killParent() (int, error) {
+	// If it's systemd - keep it alive. Possible e.g. when systemd
+	// performs 'socket activation'.
+	parentPID := os.Getppid()
+	if parentPID == 1 {
+		return parentPID, fmt.Errorf("failed to kill parent. It's systemd")
+	}
+	return parentPID, syscall.Kill(parentPID, syscall.SIGKILL)
 }
