@@ -72,8 +72,8 @@ func (a *App) SetWaitParentShutdownTimeout(d time.Duration) {
 	a.waitParentShutdownTimeout = d
 }
 
-// synchronous
-func (a *App) shutdown() {
+// Shutdown gracefully shutdowns all servers.
+func (a *App) Shutdown() {
 	// Wait for all servers to start serving to avoid race conditions
 	// connected with shutdown. 'Shutdown' must be called only if server
 	// has already started or it does nothing.
@@ -95,48 +95,6 @@ func (a *App) shutdown() {
 	wg.Wait()
 }
 
-func (a *App) interceptSignals(ctx context.Context, wg *sync.WaitGroup, e *exchange) {
-	defer logger.Printf("ZeroDT: stop intercepting signals")
-	defer wg.Done()
-
-	signals := make(chan os.Signal, 10)
-	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR2)
-	defer signal.Stop(signals)
-
-CatchSignals:
-	for {
-		select {
-		// Exit.
-		case <-ctx.Done():
-			return
-		// OS signal.
-		case s := <-signals:
-			logger.Printf("ZeroDT: %v signal...", s)
-			switch s {
-			// Shutdown servers. No exit here.
-			case syscall.SIGINT, syscall.SIGTERM:
-				a.shutdown()
-			// Fork/Exec a child and shutdown.
-			case syscall.SIGUSR2:
-				_, f, err := forkExec(e.activeFiles())
-				if err != nil {
-					logger.Printf("ZeroDT: failed to forkExec: '%v'", err)
-					continue CatchSignals
-				}
-				m, err := ListenSocket(f)
-				if err != nil {
-					logger.Printf("ZeroDT: failed to listen communication socket: '%v'", err)
-					continue CatchSignals
-				}
-				// Nothing to do with errors.
-				protocolActAsParent(m, a.waitChildTimeout, a.waitParentShutdownTimeout, func() {
-					a.shutdown()
-				})
-			}
-		}
-	}
-}
-
 // Serve TODO
 func (a *App) Serve() error {
 	inherited, m, err := inherit()
@@ -151,7 +109,7 @@ func (a *App) Serve() error {
 	var sigWG sync.WaitGroup
 	sigWG.Add(1)
 	sigCtx, sigCancelFunc := context.WithCancel(context.Background())
-	go a.interceptSignals(sigCtx, &sigWG, e)
+	go a.handleSignals(sigCtx, &sigWG, e)
 
 	// Servers 'Listen' wait group
 	var startWG sync.WaitGroup
@@ -199,11 +157,53 @@ func (a *App) Serve() error {
 	// calling 'Shutdown'.
 	srvWG.Wait()
 
-	// Stop intercepting signals and wait for it's goroutine.
+	// Stop handling OS signals and wait for it's goroutine.
 	sigCancelFunc()
 	sigWG.Wait()
 
 	return finalErr
+}
+
+func (a *App) handleSignals(ctx context.Context, wg *sync.WaitGroup, e *exchange) {
+	defer logger.Printf("ZeroDT: stop handling signals")
+	defer wg.Done()
+
+	signals := make(chan os.Signal, 10)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR2)
+	defer signal.Stop(signals)
+
+CatchSignals:
+	for {
+		select {
+		// Exit.
+		case <-ctx.Done():
+			return
+		// OS signal.
+		case s := <-signals:
+			logger.Printf("ZeroDT: %v signal...", s)
+			switch s {
+			// Shutdown servers. No exit here.
+			case syscall.SIGINT, syscall.SIGTERM:
+				a.Shutdown()
+			// Fork/Exec a child and shutdown.
+			case syscall.SIGUSR2:
+				_, f, err := forkExec(e.activeFiles())
+				if err != nil {
+					logger.Printf("ZeroDT: failed to forkExec: '%v'", err)
+					continue CatchSignals
+				}
+				m, err := ListenSocket(f)
+				if err != nil {
+					logger.Printf("ZeroDT: failed to listen communication socket: '%v'", err)
+					continue CatchSignals
+				}
+				// Nothing to do with errors.
+				protocolActAsParent(m, a.waitChildTimeout, a.waitParentShutdownTimeout, func() {
+					a.Shutdown()
+				})
+			}
+		}
+	}
 }
 
 // forkExec starts another process of youself and passes active
