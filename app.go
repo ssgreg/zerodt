@@ -1,3 +1,7 @@
+// Copyright 2017 Grigory Zubankov. All rights reserved.
+// Use of this source code is governed by a MIT license
+// that can be found in the LICENSE file.
+//
 // +build linux darwin
 
 package zerodt
@@ -21,7 +25,7 @@ var (
 	originalWD, _ = os.Getwd()
 )
 
-// App TODO
+// App specifies functions to control passed HTTP servers.
 type App struct {
 	served                    sync.WaitGroup
 	servers                   []*http.Server
@@ -29,7 +33,7 @@ type App struct {
 	waitChildTimeout          time.Duration
 }
 
-// NewApp TODO
+// NewApp returns a new App instance.
 func NewApp(servers ...*http.Server) *App {
 	a := &App{
 		servers:                   servers,
@@ -72,7 +76,8 @@ func (a *App) SetWaitParentShutdownTimeout(d time.Duration) {
 	a.waitParentShutdownTimeout = d
 }
 
-// Shutdown gracefully shutdowns all servers.
+// Shutdown gracefully shut downs all servers without interrupting any
+// active connections.
 func (a *App) Shutdown() {
 	// Wait for all servers to start serving to avoid race conditions
 	// connected with shutdown. 'Shutdown' must be called only if server
@@ -95,8 +100,10 @@ func (a *App) Shutdown() {
 	wg.Wait()
 }
 
-// Serve TODO
-func (a *App) Serve() error {
+// ListenAndServe creates listeners for the given servers or reuses
+// the inherited ones. It also serves the servers and monitor OS
+// signals.
+func (a *App) ListenAndServe() error {
 	inherited, m, err := inherit()
 	if err != nil {
 		logger.Printf("ZeroDT: failed to inherit listeners with: '%v'", err)

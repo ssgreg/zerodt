@@ -1,3 +1,7 @@
+// Copyright 2017 Grigory Zubankov. All rights reserved.
+// Use of this source code is governed by a MIT license
+// that can be found in the LICENSE file.
+//
 // +build linux darwin
 
 package zerodt
@@ -13,7 +17,7 @@ import (
 )
 
 // StreamMessenger a simple messenger based on net.Conn.
-// A simplest way to create messenger is to use syscall.Socketpair():
+// The simplest way to create messenger is to use syscall.Socketpair():
 //
 //	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 //	f0 := os.NewFile(uintptr(fds[0]), "s|0")

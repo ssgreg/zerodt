@@ -1,3 +1,8 @@
+// Copyright 2017 Grigory Zubankov. All rights reserved.
+// Use of this source code is governed by a MIT license
+// that can be found in the LICENSE file.
+//
+
 package zerodt
 
 import (
