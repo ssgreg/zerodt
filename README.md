@@ -1,10 +1,10 @@
 # ZeroDT [![Build Status](https://travis-ci.org/ssgreg/zerodt.svg?branch=master)](https://travis-ci.org/ssgreg/zerodt)
 
-Package zerodt offers a zero downtime restart and a graceful shutdown for HTTP servers.
+Package `ZeroDT` offers a zero downtime restart and a graceful shutdown for HTTP servers.
 
 ## Example
 
-The simplest way to use ZeroDT is to pass your http.Server to the NewApp() function and call ListenAndServe() for a object it returns:
+The simplest way to use `ZeroDT` is to pass your `http.Server` to the `zerodt.NewApp` function and call `zerodt.ListenAndServe` for a object it returns:
 
 ```go
 package main
