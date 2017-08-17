@@ -4,7 +4,7 @@ Package zerodt offers a zero downtime restart and a graceful shutdown for HTTP s
 
 ## Example
 
-The simplest way to use ZeroDT is to pass your http.Server to the NewApp() function and call Server() for a object it returns:
+The simplest way to use ZeroDT is to pass your http.Server to the NewApp() function and call ListenAndServe() for a object it returns:
 
 ```go
 package main
@@ -26,6 +26,6 @@ func main() {
     mux.HandleFunc("/", hello)
 
     a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: mux})
-    a.Serve()
+    a.ListenAndServe()
 }
 ```
