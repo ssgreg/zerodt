@@ -33,12 +33,7 @@ func main() {
 	a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: r}, &http.Server{Addr: "127.0.0.1:8082", Handler: r})
 	a.SetWaitParentShutdownTimeout(time.Second * 120)
 
-	go func() {
-		time.Sleep(time.Second * 5)
-		a.Shutdown()
-	}()
-
-	err := a.Serve()
+	err := a.ListenAndServe()
 	logrus.Println("Exit serve:", err)
 	logrus.Println("That's all Folks!")
 }

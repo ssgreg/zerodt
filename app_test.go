@@ -342,7 +342,7 @@ func startHTTPServer() {
 	if waitForParent {
 		a.SetWaitParentShutdownTimeout(time.Second * 360)
 	}
-	a.Serve()
+	a.ListenAndServe()
 
 	logger.Printf("Server finished")
 }
