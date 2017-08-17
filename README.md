@@ -25,7 +25,7 @@ func main() {
     mux := http.NewServeMux()
     mux.HandleFunc("/", hello)
 
-    a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: mux})
+    a := zerodt.NewApp(&http.Server{Addr: ":8081", Handler: mux})
     a.ListenAndServe()
 }
 ```

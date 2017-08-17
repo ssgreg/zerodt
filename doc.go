@@ -21,7 +21,7 @@ The simplest way to use ZeroDT is to pass your http.Server to the NewApp() funct
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", hello)
 
-		a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: mux})
+		a := zerodt.NewApp(&http.Server{Addr: ":8081", Handler: mux})
 		a.ListenAndServe()
 	}
 
