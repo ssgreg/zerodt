@@ -1,7 +1,7 @@
 /*
 Package zerodt offers a zero downtime restart and a graceful shutdown for HTTP servers.
 
-The simplest way to use ZeroDT is to pass your http.Server to the NewApp() function and call ListenAndServe() for a object it returns:
+The simplest way to use ZeroDT is to pass your http.Server to the NewApp() function and call ListenAndServe() for an object it returns:
 
 	package main
 
