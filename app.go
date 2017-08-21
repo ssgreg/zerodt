@@ -27,6 +27,8 @@ var (
 
 // App specifies functions to control passed HTTP servers.
 type App struct {
+	PreServeFn func() error
+
 	served                    sync.WaitGroup
 	servers                   []*http.Server
 	waitParentShutdownTimeout time.Duration
@@ -36,9 +38,10 @@ type App struct {
 // NewApp returns a new App instance.
 func NewApp(servers ...*http.Server) *App {
 	a := &App{
+		PreServeFn:                func() error { return nil },
 		servers:                   servers,
-		waitParentShutdownTimeout: 0,
 		waitChildTimeout:          time.Second * 60,
+		waitParentShutdownTimeout: 0,
 	}
 	// Need to be sure all servers are serving before calling shutdown.
 	a.served.Add(len(a.servers))
@@ -68,7 +71,7 @@ func (a *App) SetWaitChildTimeout(d time.Duration) {
 // kill his parent.
 //
 // The timeout is usable for statefull services and basically describes
-// maxim amount of time for a single request handling by a parent.
+// maximum amount of time for a single request handling by a parent.
 //
 // Default value is 0 that means no timeout. A child will start
 // accepting new connections immediately.
@@ -101,7 +104,7 @@ func (a *App) Shutdown() {
 }
 
 // ListenAndServe creates listeners for the given servers or reuses
-// the inherited ones. It also serves the servers and monitor OS
+// the inherited ones. It also serves the servers and monitors OS
 // signals.
 func (a *App) ListenAndServe() error {
 	inherited, m, err := inherit()
@@ -157,10 +160,11 @@ func (a *App) ListenAndServe() error {
 		finalErr = protocolActAsChild(m, a.waitChildTimeout, a.waitParentShutdownTimeout)
 	}
 
+	a.PreServeFn()
 	// Allow serverse's goroutines to start serving
 	parentWG.Done()
 
-	// Wait for all server's at first. They may fail or be stopped by
+	// Wait for all server's. They may fail or be stopped by
 	// calling 'Shutdown'.
 	srvWG.Wait()
 
@@ -213,7 +217,7 @@ CatchSignals:
 	}
 }
 
-// forkExec starts another process of youself and passes active
+// forkExec starts another process of youself and passes the active
 // listeners to a child to perform socket activation.
 func forkExec(files []*os.File) (int, *os.File, error) {
 	// Get the path name for the executable that started the current process.
