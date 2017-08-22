@@ -291,6 +291,29 @@ func TestTrippleRestartStateless(t *testing.T) {
 	require.Equal(t, 1, <-ch)
 }
 
+func TestKillParent(t *testing.T) {
+	d := newRun(t, 2608)
+	d.start(true)
+
+	_, err := killProcess(d.lastProcess().Pid)
+	require.NoError(t, err)
+	st, err := d.lastProcess().Wait()
+	assert.Nil(t, st)
+	assert.EqualValues(t, syscall.ECHILD, underlyingError(err).(syscall.Errno))
+}
+
+func underlyingError(err error) error {
+	switch err := err.(type) {
+	case *os.PathError:
+		return err.Err
+	case *os.LinkError:
+		return err.Err
+	case *os.SyscallError:
+		return err.Err
+	}
+	return err
+}
+
 //
 // A server live here.
 //

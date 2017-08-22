@@ -376,12 +376,24 @@ func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, wait
 	return nil
 }
 
-func killParent() (int, error) {
+func killParent() (parentPID int, err error) {
+	return killProcess(os.Getppid())
+}
+
+func killProcess(pid int) (parentPID int, err error) {
 	// If it's systemd - keep it alive. Possible e.g. when systemd
 	// performs 'socket activation'.
-	parentPID := os.Getppid()
-	if parentPID == 1 {
-		return parentPID, fmt.Errorf("failed to kill parent. It's systemd")
+	if pid == 1 {
+		return pid, fmt.Errorf("failed to kill process. It's systemd")
 	}
-	return parentPID, syscall.Kill(parentPID, syscall.SIGKILL)
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	err = p.Signal(syscall.SIGKILL)
+	if err != nil {
+		return
+	}
+	_, err = p.Wait()
+	return
 }
