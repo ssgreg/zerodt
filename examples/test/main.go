@@ -1,9 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -24,7 +27,17 @@ func sleep(w http.ResponseWriter, r *http.Request) {
 	logrus.Printf("Handled message %s, %v", r.RequestURI, err)
 }
 
+var pidPath = flag.String("pid", "", "pid path")
+
+func updatePID() {
+	if *pidPath != "" {
+		err := ioutil.WriteFile(*pidPath, []byte(strconv.Itoa(os.Getpid())), 0644)
+		logrus.Println("Write pid to ", pidPath, "with err", err)
+	}
+}
+
 func main() {
+	flag.Parse()
 	zerodt.SetLogger(logrus.StandardLogger())
 
 	r := mux.NewRouter()
@@ -32,6 +45,16 @@ func main() {
 
 	a := zerodt.NewApp(&http.Server{Addr: "127.0.0.1:8081", Handler: r}, &http.Server{Addr: "127.0.0.1:8082", Handler: r})
 	a.SetWaitParentShutdownTimeout(time.Second * 120)
+
+	a.PreServeFn = func(isChild bool) error {
+		if !isChild {
+			updatePID()
+		}
+		return nil
+	}
+	a.PreParentExitFn = func() {
+		updatePID()
+	}
 
 	err := a.ListenAndServe()
 	logrus.Println("Exit serve:", err)

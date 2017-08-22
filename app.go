@@ -27,7 +27,15 @@ var (
 
 // App specifies functions to control passed HTTP servers.
 type App struct {
-	PreServeFn func() error
+	// PreServeFn is a common hook notifies client that all servers is
+	// about to start serving.
+	PreServeFn func(inherited bool) error
+	// PreParentExitFn is a child's hook that allows client to do
+	// something on a child's side before the parent will exit.
+	//
+	// Useful e.g. for updating pid in a pid file while acting
+	// as a systemd's service.
+	PreParentExitFn func()
 
 	served                    sync.WaitGroup
 	servers                   []*http.Server
@@ -38,7 +46,8 @@ type App struct {
 // NewApp returns a new App instance.
 func NewApp(servers ...*http.Server) *App {
 	a := &App{
-		PreServeFn:                func() error { return nil },
+		PreServeFn:                func(inherited bool) error { return nil },
+		PreParentExitFn:           func() {},
 		servers:                   servers,
 		waitChildTimeout:          time.Second * 60,
 		waitParentShutdownTimeout: 0,
@@ -121,7 +130,7 @@ func (a *App) ListenAndServe() error {
 	sigCtx, sigCancelFunc := context.WithCancel(context.Background())
 	go a.handleSignals(sigCtx, &sigWG, e)
 
-	// Servers 'Listen' wait group
+	// Servers 'Listen' wait group.
 	var startWG sync.WaitGroup
 	startWG.Add(len(a.servers))
 	// Servers 'Serve' wait group.
@@ -157,11 +166,14 @@ func (a *App) ListenAndServe() error {
 	startWG.Wait()
 
 	if m != nil {
-		finalErr = protocolActAsChild(m, a.waitChildTimeout, a.waitParentShutdownTimeout)
+		finalErr = protocolActAsChild(m, a.waitChildTimeout, a.waitParentShutdownTimeout, a.PreParentExitFn)
 	}
 
-	a.PreServeFn()
-	// Allow serverse's goroutines to start serving
+	if finalErr == nil {
+		a.PreServeFn(e.didInherit())
+	}
+
+	// Allow serverse's goroutines to start serving.
 	parentWG.Done()
 
 	// Wait for all server's. They may fail or be stopped by
@@ -237,8 +249,7 @@ func forkExec(files []*os.File) (int, *os.File, error) {
 		return -1, nil, err
 	}
 	f0 := os.NewFile(uintptr(fds[0]), "s|0")
-	f1 := os.NewFile(uintptr(fds[1]), "s|0")
-
+	f1 := os.NewFile(uintptr(fds[1]), "s|1")
 	files = append(files, f1)
 
 	// Start the original executable with the original working directory.
@@ -275,6 +286,9 @@ type readyConfirmationMsg struct {
 	FixedWaitParentShutdownTimeout time.Duration
 }
 
+type acceptedMsg struct {
+}
+
 type shutdownConfirmationMsg struct {
 }
 
@@ -295,9 +309,10 @@ func maxTimeout(l time.Duration, r time.Duration) time.Duration {
 
 func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, waitParentShutdownTimeout time.Duration, shutdownFn func()) error {
 	defer m.Close()
-	// Set deadline for ready/confirmation
+	// Set deadline for ready/confirmation.
 	m.SetDeadline(time.Now().Add(waitChildTimeout))
-	// Child->Parent, ready message
+
+	// Child->Parent, ready message.
 	logger.Printf("ZeroDT: waiting for readyMsg...")
 	r := readyMsg{}
 	err := m.Recv(&r)
@@ -306,7 +321,8 @@ func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, wai
 		// The child will die by timout.
 		return err
 	}
-	// Parent->Child, ready confirmation message
+
+	// Parent->Child, ready confirmation message.
 	logger.Printf("ZeroDT: sending readyConfirmationMsg to the child...")
 	tipTimeout := maxTimeout(r.WaitParentShutdownTimeout, waitParentShutdownTimeout)
 	err = m.Send(readyConfirmationMsg{FixedWaitParentShutdownTimeout: tipTimeout})
@@ -315,9 +331,23 @@ func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, wai
 		// The child will die by timout.
 		return err
 	}
+
+	//
+	// Ball is in child's court now. No error can stop parent to shutdown.
+	//
+
+	// Child->Parent, accepted message.
+	logger.Printf("ZeroDT: waiting for acceptedMsg...")
+	a := acceptedMsg{}
+	err = m.Recv(&a)
+	if err != nil {
+		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+	}
+
 	// Shutdown callback.
 	shutdownFn()
-	// Parent->Child, shutdown confirmation message
+
+	// Parent->Child, shutdown confirmation message.
 	if tipTimeout == 0 {
 		return nil
 	}
@@ -326,14 +356,14 @@ func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, wai
 	err = m.Send(shutdownConfirmationMsg{})
 	if err != nil {
 		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
-		// Ball is in child's court now. Not an error for shutdown.
 	}
 	return nil
 }
 
-func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, waitParentShutdownTimeout time.Duration) error {
+func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, waitParentShutdownTimeout time.Duration, notifyFn func()) error {
 	defer m.Close()
-	// Child->Parent, ready message
+
+	// Child->Parent, ready message.
 	logger.Printf("ZeroDT: sending readyMsg to the parent...")
 	m.SetDeadline(time.Now().Add(sendTimeout))
 	err := m.Send(readyMsg{WaitParentShutdownTimeout: waitParentShutdownTimeout})
@@ -341,7 +371,8 @@ func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, wait
 		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
 		return err
 	}
-	// Parent->Child, ready confirmation message
+
+	// Parent->Child, ready confirmation message.
 	logger.Printf("ZeroDT: waiting for readyConfirmationMsg...")
 	rcr := readyConfirmationMsg{}
 	m.SetDeadline(time.Now().Add(maxTimeout(waitChildTimeout, waitParentShutdownTimeout)))
@@ -351,10 +382,25 @@ func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, wait
 		return err
 	}
 
+	//
+	// Ball is in our court now. The parent must die.
+	//
+
+	notifyFn()
+
+	// Child->Parent, accepted message.
+	logger.Printf("ZeroDT: sending acceptedMsg...")
+	m.SetDeadline(time.Now().Add(sendTimeout))
+	err = m.Send(acceptedMsg{})
+	if err != nil {
+		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+	}
+
 	if rcr.FixedWaitParentShutdownTimeout == 0 {
 		return nil
 	}
-	// Parent->Child, shutdown confirmation message
+
+	// Parent->Child, shutdown confirmation message.
 	logger.Printf("ZeroDT: waiting for shutdownConfirmationMsg...")
 	scr := shutdownConfirmationMsg{}
 	m.SetDeadline(time.Now().Add(rcr.FixedWaitParentShutdownTimeout))
@@ -363,8 +409,7 @@ func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, wait
 		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
 		if opErr, ok := err.(*net.OpError); ok {
 			if opErr.Timeout() {
-				// Ball is in our court now. There are issues on parent's
-				// side probably. Need to kill parent.
+				// There are issues on parent's side probably. Need to kill parent.
 				parentPID, err := killParent()
 				logger.Printf("ZeroDT: parent %d was killed with: '%v'", parentPID, err)
 				return nil
