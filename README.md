@@ -2,6 +2,7 @@
 
 [![GoDoc](https://godoc.org/github.com/ssgreg/zerodt?status.svg)](https://godoc.org/github.com/ssgreg/zerodt)
 [![Build Status](https://travis-ci.org/ssgreg/zerodt.svg?branch=master)](https://travis-ci.org/ssgreg/zerodt)
+[![Go Report Status](https://goreportcard.com/badge/github.com/ssgreg/zerodt)](https://goreportcard.com/report/github.com/ssgreg/zerodt)
 
 Package `ZeroDT` offers a zero downtime restart and a graceful shutdown for HTTP servers. Key features:
 
@@ -38,3 +39,7 @@ func main() {
     a.ListenAndServe()
 }
 ```
+
+## Adopting your HTTP server to use as `systemd's` service
+
+Under construction

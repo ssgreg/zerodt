@@ -229,7 +229,7 @@ CatchSignals:
 	}
 }
 
-// forkExec starts another process of youself and passes the active
+// forkExec starts another process of yourself and passes the active
 // listeners to a child to perform socket activation.
 func forkExec(files []*os.File) (int, *os.File, error) {
 	// Get the path name for the executable that started the current process.
