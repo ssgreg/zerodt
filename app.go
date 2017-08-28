@@ -27,11 +27,19 @@ var (
 
 // App specifies functions to control passed HTTP servers.
 type App struct {
-	// PreServeFn is a common hook notifies client that all servers is
+	// PreServeFn is a common hook notifies client that all servers are
 	// about to start serving.
 	PreServeFn func(inherited bool) error
+
+	// CompleteShutdownFn is a parent's hook, a part of shutdown process
+	// that allows client to do extra work after all http servers will
+	// be shutdown. All dependent resources can be closed here.
+	//
+	// For stateful services: and before child will start serving.
+	CompleteShutdownFn func()
+
 	// PreParentExitFn is a child's hook that allows client to do
-	// something on a child's side before the parent will exit.
+	// extra work on a child's side before the parent will exit.
 	//
 	// Useful e.g. for updating pid in a pid file while acting
 	// as a systemd's service.
@@ -47,6 +55,7 @@ type App struct {
 func NewApp(servers ...*http.Server) *App {
 	a := &App{
 		PreServeFn:                func(inherited bool) error { return nil },
+		CompleteShutdownFn:        func() {},
 		PreParentExitFn:           func() {},
 		servers:                   servers,
 		waitChildTimeout:          time.Second * 60,
@@ -110,6 +119,7 @@ func (a *App) Shutdown() {
 	}
 
 	wg.Wait()
+	a.CompleteShutdownFn()
 }
 
 // ListenAndServe creates listeners for the given servers or reuses
