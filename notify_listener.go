@@ -23,22 +23,32 @@ import (
 //
 //   var wg sync.WaitGroup
 //   l, _ := net.Listen("tcp", ":8080")
+//   once := &doneOnce(wg: &wg)
 //
-//   go s.Serve(&notifyListener{Listener: l, wg: &wg})
+//   go s.Serve(&notifyListener{Listener: l, doneOnce: once})
 //
 //   wg.Wait()
 //   // It's safe to call shutdown here
 //   s.Shutdown(context.Background())
 //
-type notifyListener struct {
-	net.Listener
+
+type doneOnce struct {
 	wg   *sync.WaitGroup
 	once sync.Once
 }
 
-func (l *notifyListener) Accept() (net.Conn, error) {
-	l.once.Do(func() {
-		l.wg.Done()
+func (n *doneOnce) Done() {
+	n.once.Do(func() {
+		n.wg.Done()
 	})
+}
+
+type notifyListener struct {
+	net.Listener
+	doneOnce *doneOnce
+}
+
+func (l *notifyListener) Accept() (net.Conn, error) {
+	l.doneOnce.Done()
 	return l.Listener.Accept()
 }

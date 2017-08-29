@@ -114,7 +114,11 @@ func (a *App) Shutdown() {
 		go func(s *http.Server) {
 			defer wg.Done()
 			err := s.Shutdown(context.Background())
-			logger.Printf("ZeroDT: server '%v' is shutdown with: '%v'", s.Addr, err)
+			if err != nil {
+				logger.Printf("ZeroDT: server %s has been shutdown with: %v", s.Addr, err)
+				return
+			}
+			logger.Printf("ZeroDT: server %s has been shutdown", s.Addr)
 		}(s)
 	}
 
@@ -126,7 +130,7 @@ func (a *App) Shutdown() {
 // the inherited ones. It also serves the servers and monitors OS
 // signals.
 func (a *App) ListenAndServe() error {
-	inherited, m, err := inherit()
+	inherited, messenger, err := inherit()
 	if err != nil {
 		logger.Printf("ZeroDT: failed to inherit listeners with: '%v'", err)
 		return err
@@ -155,45 +159,53 @@ func (a *App) ListenAndServe() error {
 	for _, s := range a.servers {
 		go func(s *http.Server) {
 			defer srvWG.Done()
+			// Make sure Shutdown is not blocked event if
+			// notifyListener.Accept() not call.
+			servedOnce := &doneOnce{wg: &a.served}
+			defer servedOnce.Done()
+			// Make sure startWG.Wait() is not blocked in case of error
+			// in acquireOrCreateListener.
+			startOnce := &doneOnce{wg: &startWG}
+			defer startOnce.Done()
+
 			l, err := e.acquireOrCreateListener("tcp", s.Addr)
-			startWG.Done()
 			if err != nil {
 				// TODO: error channel
-				logger.Printf("ZeroDT: failed to listen on '%v' with %v", s.Addr, err)
+				logger.Printf("ZeroDT: failed to listen on %v with %v", s.Addr, err)
 				return
 			}
+			// A server is about to Serve and already listen.
+			startOnce.Done()
+			// Wait for parent to start if set.
 			parentWG.Wait()
 			if finalErr != nil {
-				logger.Printf("ZeroDT: server '%v' has finished serving with %v", s.Addr, err)
+				logger.Printf("ZeroDT: server %v has finished serving with %v", s.Addr, err)
 				return
 			}
-			err = s.Serve(&notifyListener{Listener: tcpKeepAliveListener{l}, wg: &a.served})
-			logger.Printf("ZeroDT: server '%v' has finished serving with %v", s.Addr, err)
+			err = s.Serve(&notifyListener{Listener: tcpKeepAliveListener{l}, doneOnce: servedOnce})
+			logger.Printf("ZeroDT: server %v has finished serving with %v", s.Addr, err)
 		}(s)
 	}
 
 	// Wait for all listeners to start listening.
 	startWG.Wait()
 
-	if m != nil {
-		finalErr = protocolActAsChild(m, a.waitChildTimeout, a.waitParentShutdownTimeout, a.PreParentExitFn)
+	if messenger != nil {
+		finalErr = protocolActAsChild(messenger, a.waitChildTimeout, a.waitParentShutdownTimeout, a.PreParentExitFn)
 	}
-
 	if finalErr == nil {
 		a.PreServeFn(e.didInherit())
 	}
 
 	// Allow serverse's goroutines to start serving.
 	parentWG.Done()
-
-	// Wait for all server's. They may fail or be stopped by
-	// calling 'Shutdown'.
+	// Wait for all server's. They may fail or be stopped by calling
+	// Shutdown.
 	srvWG.Wait()
-
 	// Stop handling OS signals and wait for it's goroutine.
 	sigCancelFunc()
 	sigWG.Wait()
-
+	logger.Printf("ZeroDT: exit")
 	return finalErr
 }
 
@@ -205,11 +217,18 @@ func (a *App) handleSignals(ctx context.Context, wg *sync.WaitGroup, e *exchange
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR2)
 	defer signal.Stop(signals)
 
+	wasShutdown := false
+
 CatchSignals:
 	for {
 		select {
 		// Exit.
 		case <-ctx.Done():
+			if !wasShutdown {
+				// Possbile in case of errors in 'http.Serve'.
+				// It's needed to start shutdown process any way.
+				a.Shutdown()
+			}
 			return
 		// OS signal.
 		case s := <-signals:
@@ -218,6 +237,7 @@ CatchSignals:
 			// Shutdown servers. No exit here.
 			case syscall.SIGINT, syscall.SIGTERM:
 				a.Shutdown()
+				wasShutdown = true
 			// Fork/Exec a child and shutdown.
 			case syscall.SIGUSR2:
 				_, f, err := forkExec(e.activeFiles())
@@ -233,6 +253,7 @@ CatchSignals:
 				// Nothing to do with errors.
 				protocolActAsParent(m, a.waitChildTimeout, a.waitParentShutdownTimeout, func() {
 					a.Shutdown()
+					wasShutdown = true
 				})
 			}
 		}
