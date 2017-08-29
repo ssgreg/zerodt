@@ -147,18 +147,18 @@ func (a *App) ListenAndServe() error {
 	// Servers 'Listen' wait group.
 	var startWG sync.WaitGroup
 	startWG.Add(len(a.servers))
-	// Servers 'Serve' wait group.
-	var srvWG sync.WaitGroup
-	srvWG.Add(len(a.servers))
+	// Servers 'Serve' channel.
+	finishCh := make(chan error, len(a.servers))
 	// Waiting for parent wait group.
 	var parentWG sync.WaitGroup
 	parentWG.Add(1)
 
-	var finalErr error
+	var startErr error
 
 	for _, s := range a.servers {
 		go func(s *http.Server) {
-			defer srvWG.Done()
+			var err error
+			defer func() { finishCh <- err }()
 			// Make sure Shutdown is not blocked event if
 			// notifyListener.Accept() not call.
 			servedOnce := &doneOnce{wg: &a.served}
@@ -170,20 +170,20 @@ func (a *App) ListenAndServe() error {
 
 			l, err := e.acquireOrCreateListener("tcp", s.Addr)
 			if err != nil {
-				// TODO: error channel
-				logger.Printf("ZeroDT: failed to listen on %v with %v", s.Addr, err)
+				logger.Printf("ZeroDT: failed to listen on %v with: %v", s.Addr, err)
 				return
 			}
 			// A server is about to Serve and already listen.
 			startOnce.Done()
 			// Wait for parent to start if set.
 			parentWG.Wait()
-			if finalErr != nil {
-				logger.Printf("ZeroDT: server %v has finished serving with %v", s.Addr, err)
+			if startErr != nil {
+				logger.Printf("ZeroDT: server %v exited with: %v", s.Addr, startErr)
 				return
 			}
+			// TODO: shutdown all servers in case of error
 			err = s.Serve(&notifyListener{Listener: tcpKeepAliveListener{l}, doneOnce: servedOnce})
-			logger.Printf("ZeroDT: server %v has finished serving with %v", s.Addr, err)
+			logger.Printf("ZeroDT: server %v has finished serving with: %v", s.Addr, err)
 		}(s)
 	}
 
@@ -191,21 +191,30 @@ func (a *App) ListenAndServe() error {
 	startWG.Wait()
 
 	if messenger != nil {
-		finalErr = protocolActAsChild(messenger, a.waitChildTimeout, a.waitParentShutdownTimeout, a.PreParentExitFn)
+		startErr = protocolActAsChild(messenger, a.waitChildTimeout, a.waitParentShutdownTimeout, a.PreParentExitFn)
 	}
-	if finalErr == nil {
-		a.PreServeFn(e.didInherit())
+	if startErr == nil {
+		startErr = a.PreServeFn(e.didInherit())
 	}
 
 	// Allow serverse's goroutines to start serving.
 	parentWG.Done()
-	// Wait for all server's. They may fail or be stopped by calling
-	// Shutdown.
-	srvWG.Wait()
-	// Stop handling OS signals and wait for it's goroutine.
+
+	// Wait for all server's. They may fail or be stopped by calling Shutdown.
+	finalErr := startErr
+	if finalErr != nil {
+		sigCancelFunc()
+	}
+	for range a.servers {
+		err = <-finishCh
+		if finalErr == nil && err != nil && err != http.ErrServerClosed {
+			sigCancelFunc()
+			finalErr = err
+		}
+	}
 	sigCancelFunc()
 	sigWG.Wait()
-	logger.Printf("ZeroDT: exit")
+
 	return finalErr
 }
 
