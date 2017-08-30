@@ -97,7 +97,7 @@ func (e *exchange) acquireOrCreateListener(netStr, addrStr string) (*net.TCPList
 	// Try to acquire one of inherited listeners.
 	l := e.acquireListener(addr)
 	if l != nil {
-		logger.Printf("listener '%v' acquired", addr)
+		logger.Printf("listener %v acquired", addr)
 		return l, nil
 	}
 
@@ -111,7 +111,7 @@ func (e *exchange) acquireOrCreateListener(netStr, addrStr string) (*net.TCPList
 		l.Close()
 		return nil, err
 	}
-	logger.Printf("listener '%v' created", addr)
+	logger.Printf("listener %v created", addr)
 
 	return l, nil
 }
