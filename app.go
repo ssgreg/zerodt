@@ -103,7 +103,7 @@ func (a *App) Shutdown() {
 	// Wait for all servers to start serving to avoid race conditions
 	// connected with shutdown. 'Shutdown' must be called only if server
 	// has already started or it does nothing.
-	logger.Printf("ZeroDT: shutdown servers...")
+	logger.Printf("shutdown servers...")
 	a.served.Wait()
 
 	var wg sync.WaitGroup
@@ -115,10 +115,10 @@ func (a *App) Shutdown() {
 			defer wg.Done()
 			err := s.Shutdown(context.Background())
 			if err != nil {
-				logger.Printf("ZeroDT: server %s has been shutdown with: %v", s.Addr, err)
+				logger.Printf("server %s has been shutdown with: %v", s.Addr, err)
 				return
 			}
-			logger.Printf("ZeroDT: server %s has been shutdown", s.Addr)
+			logger.Printf("server %s has been shutdown", s.Addr)
 		}(s)
 	}
 
@@ -132,11 +132,11 @@ func (a *App) Shutdown() {
 func (a *App) ListenAndServe() error {
 	inherited, messenger, err := inherit()
 	if err != nil {
-		logger.Printf("ZeroDT: failed to inherit listeners with: '%v'", err)
+		logger.Printf("failed to inherit listeners with: '%v'", err)
 		return err
 	}
 	e := newExchange(inherited)
-	logger.Printf("ZeroDT: serving with pid='%d', inherited='%s'", os.Getpid(), formatInherited(e))
+	logger.Printf("serving with pid='%d', inherited='%s'", os.Getpid(), formatInherited(e))
 
 	// Signals wait group.
 	var sigWG sync.WaitGroup
@@ -170,7 +170,7 @@ func (a *App) ListenAndServe() error {
 
 			l, err := e.acquireOrCreateListener("tcp", s.Addr)
 			if err != nil {
-				logger.Printf("ZeroDT: failed to listen on %v with: %v", s.Addr, err)
+				logger.Printf("failed to listen on %v with: %v", s.Addr, err)
 				return
 			}
 			// A server is about to Serve and already listen.
@@ -178,12 +178,12 @@ func (a *App) ListenAndServe() error {
 			// Wait for parent to start if set.
 			parentWG.Wait()
 			if startErr != nil {
-				logger.Printf("ZeroDT: server %v exited with: %v", s.Addr, startErr)
+				logger.Printf("server %v exited with: %v", s.Addr, startErr)
 				return
 			}
 			// TODO: shutdown all servers in case of error
 			err = s.Serve(&notifyListener{Listener: tcpKeepAliveListener{l}, doneOnce: servedOnce})
-			logger.Printf("ZeroDT: server %v has finished serving with: %v", s.Addr, err)
+			logger.Printf("server %v has finished serving with: %v", s.Addr, err)
 		}(s)
 	}
 
@@ -219,7 +219,7 @@ func (a *App) ListenAndServe() error {
 }
 
 func (a *App) handleSignals(ctx context.Context, wg *sync.WaitGroup, e *exchange) {
-	defer logger.Printf("ZeroDT: stop handling signals")
+	defer logger.Printf("stop handling signals")
 	defer wg.Done()
 
 	signals := make(chan os.Signal, 10)
@@ -241,7 +241,7 @@ CatchSignals:
 			return
 		// OS signal.
 		case s := <-signals:
-			logger.Printf("ZeroDT: %v signal...", s)
+			logger.Printf("%v signal...", s)
 			switch s {
 			// Shutdown servers. No exit here.
 			case syscall.SIGINT, syscall.SIGTERM:
@@ -251,12 +251,12 @@ CatchSignals:
 			case syscall.SIGUSR2:
 				_, f, err := forkExec(e.activeFiles())
 				if err != nil {
-					logger.Printf("ZeroDT: failed to forkExec: '%v'", err)
+					logger.Printf("failed to forkExec: '%v'", err)
 					continue CatchSignals
 				}
 				m, err := ListenSocket(f)
 				if err != nil {
-					logger.Printf("ZeroDT: failed to listen communication socket: '%v'", err)
+					logger.Printf("failed to listen communication socket: '%v'", err)
 					continue CatchSignals
 				}
 				// Nothing to do with errors.
@@ -353,21 +353,21 @@ func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, wai
 	m.SetDeadline(time.Now().Add(waitChildTimeout))
 
 	// Child->Parent, ready message.
-	logger.Printf("ZeroDT: waiting for readyMsg...")
+	logger.Printf("waiting for readyMsg...")
 	r := readyMsg{}
 	err := m.Recv(&r)
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 		// The child will die by timout.
 		return err
 	}
 
 	// Parent->Child, ready confirmation message.
-	logger.Printf("ZeroDT: sending readyConfirmationMsg to the child...")
+	logger.Printf("sending readyConfirmationMsg to the child...")
 	tipTimeout := maxTimeout(r.WaitParentShutdownTimeout, waitParentShutdownTimeout)
 	err = m.Send(readyConfirmationMsg{FixedWaitParentShutdownTimeout: tipTimeout})
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 		// The child will die by timout.
 		return err
 	}
@@ -377,11 +377,11 @@ func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, wai
 	//
 
 	// Child->Parent, accepted message.
-	logger.Printf("ZeroDT: waiting for acceptedMsg...")
+	logger.Printf("waiting for acceptedMsg...")
 	a := acceptedMsg{}
 	err = m.Recv(&a)
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 	}
 
 	// Shutdown callback.
@@ -391,11 +391,11 @@ func protocolActAsParent(m *StreamMessenger, waitChildTimeout time.Duration, wai
 	if tipTimeout == 0 {
 		return nil
 	}
-	logger.Printf("ZeroDT: sending shutdownConfirmationMsg to the child...")
+	logger.Printf("sending shutdownConfirmationMsg to the child...")
 	m.SetDeadline(time.Now().Add(sendTimeout))
 	err = m.Send(shutdownConfirmationMsg{})
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 	}
 	return nil
 }
@@ -404,21 +404,21 @@ func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, wait
 	defer m.Close()
 
 	// Child->Parent, ready message.
-	logger.Printf("ZeroDT: sending readyMsg to the parent...")
+	logger.Printf("sending readyMsg to the parent...")
 	m.SetDeadline(time.Now().Add(sendTimeout))
 	err := m.Send(readyMsg{WaitParentShutdownTimeout: waitParentShutdownTimeout})
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 		return err
 	}
 
 	// Parent->Child, ready confirmation message.
-	logger.Printf("ZeroDT: waiting for readyConfirmationMsg...")
+	logger.Printf("waiting for readyConfirmationMsg...")
 	rcr := readyConfirmationMsg{}
 	m.SetDeadline(time.Now().Add(maxTimeout(waitChildTimeout, waitParentShutdownTimeout)))
 	err = m.Recv(&rcr)
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 		return err
 	}
 
@@ -429,11 +429,11 @@ func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, wait
 	notifyFn()
 
 	// Child->Parent, accepted message.
-	logger.Printf("ZeroDT: sending acceptedMsg...")
+	logger.Printf("sending acceptedMsg...")
 	m.SetDeadline(time.Now().Add(sendTimeout))
 	err = m.Send(acceptedMsg{})
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 	}
 
 	if rcr.FixedWaitParentShutdownTimeout == 0 {
@@ -441,17 +441,17 @@ func protocolActAsChild(m *StreamMessenger, waitChildTimeout time.Duration, wait
 	}
 
 	// Parent->Child, shutdown confirmation message.
-	logger.Printf("ZeroDT: waiting for shutdownConfirmationMsg...")
+	logger.Printf("waiting for shutdownConfirmationMsg...")
 	scr := shutdownConfirmationMsg{}
 	m.SetDeadline(time.Now().Add(rcr.FixedWaitParentShutdownTimeout))
 	err = m.Recv(&scr)
 	if err != nil {
-		logger.Printf("ZeroDT: Parent<=>Child communication failed with: '%v'", err)
+		logger.Printf("Parent<=>Child communication failed with: '%v'", err)
 		if opErr, ok := err.(*net.OpError); ok {
 			if opErr.Timeout() {
 				// There are issues on parent's side probably. Need to kill parent.
 				parentPID, err := killParent()
-				logger.Printf("ZeroDT: parent %d was killed with: '%v'", parentPID, err)
+				logger.Printf("parent %d was killed with: '%v'", parentPID, err)
 				return nil
 			}
 		}

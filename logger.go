@@ -15,20 +15,31 @@ type StdLogger interface {
 	Print(...interface{})
 	Printf(string, ...interface{})
 	Println(...interface{})
-
-	Fatal(...interface{})
-	Fatalf(string, ...interface{})
-	Fatalln(...interface{})
-
-	Panic(...interface{})
-	Panicf(string, ...interface{})
-	Panicln(...interface{})
 }
 
 var (
 	// logger discards all log messages by default
 	logger StdLogger = log.New(ioutil.Discard, "", 0)
 )
+
+type prefixLogger struct {
+	StdLogger
+	prefix string
+}
+
+func (l *prefixLogger) Print(args ...interface{}) {
+	args = append([]interface{}{l.prefix}, args...)
+	l.StdLogger.Print(args...)
+}
+
+func (l *prefixLogger) Printf(format string, args ...interface{}) {
+	l.StdLogger.Printf(l.prefix+" "+format, args...)
+}
+
+func (l *prefixLogger) Println(args ...interface{}) {
+	args = append([]interface{}{l.prefix}, args...)
+	l.StdLogger.Println(args...)
+}
 
 // SetLogger allows to set a different logger that is compatible with StdLogger
 // interface. Tested with stdlib logger:
@@ -40,5 +51,5 @@ var (
 //   logrus.StandardLogger()
 //
 func SetLogger(l StdLogger) {
-	logger = l
+	logger = &prefixLogger{StdLogger: l, prefix: "zerodt:"}
 }
