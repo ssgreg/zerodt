@@ -49,6 +49,8 @@ type App struct {
 	servers                   []*http.Server
 	waitParentShutdownTimeout time.Duration
 	waitChildTimeout          time.Duration
+	shutdownSync              sync.Mutex
+	wasShutdown               bool
 }
 
 // NewApp returns a new App instance.
@@ -103,6 +105,13 @@ func (a *App) Shutdown() {
 	// Wait for all servers to start serving to avoid race conditions
 	// connected with shutdown. 'Shutdown' must be called only if server
 	// has already started or it does nothing.
+	a.shutdownSync.Lock()
+	defer a.shutdownSync.Unlock()
+
+	if a.wasShutdown {
+		return
+	}
+
 	logger.Printf("shutdown servers...")
 	a.served.Wait()
 
@@ -122,6 +131,7 @@ func (a *App) Shutdown() {
 		}(s)
 	}
 
+	a.wasShutdown = true
 	wg.Wait()
 	a.CompleteShutdownFn()
 }
@@ -226,18 +236,14 @@ func (a *App) handleSignals(ctx context.Context, wg *sync.WaitGroup, e *exchange
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR2)
 	defer signal.Stop(signals)
 
-	wasShutdown := false
-
 CatchSignals:
 	for {
 		select {
 		// Exit.
 		case <-ctx.Done():
-			if !wasShutdown {
-				// Possbile in case of errors in 'http.Serve'.
-				// It's needed to start shutdown process any way.
-				a.Shutdown()
-			}
+			// Possbile in case of errors in 'http.Serve'.
+			// It's needed to start shutdown process any way.
+			a.Shutdown()
 			return
 		// OS signal.
 		case s := <-signals:
@@ -246,7 +252,6 @@ CatchSignals:
 			// Shutdown servers. No exit here.
 			case syscall.SIGINT, syscall.SIGTERM:
 				a.Shutdown()
-				wasShutdown = true
 			// Fork/Exec a child and shutdown.
 			case syscall.SIGUSR2:
 				_, f, err := forkExec(e.activeFiles())
@@ -262,7 +267,6 @@ CatchSignals:
 				// Nothing to do with errors.
 				protocolActAsParent(m, a.waitChildTimeout, a.waitParentShutdownTimeout, func() {
 					a.Shutdown()
-					wasShutdown = true
 				})
 			}
 		}
