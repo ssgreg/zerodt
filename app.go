@@ -193,7 +193,11 @@ func (a *App) ListenAndServe() error {
 			}
 			// TODO: shutdown all servers in case of error
 			err = s.Serve(&notifyListener{Listener: tcpKeepAliveListener{l}, doneOnce: servedOnce})
-			logger.Printf("server %v has finished serving with: %v", s.Addr, err)
+			if err == http.ErrServerClosed {
+				logger.Printf("server %v has finished serving", s.Addr)
+			} else {
+				logger.Printf("server %v has finished serving with: %v", s.Addr, err)
+			}
 		}(s)
 	}
 
