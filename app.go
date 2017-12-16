@@ -251,7 +251,7 @@ CatchSignals:
 			return
 		// OS signal.
 		case s := <-signals:
-			logger.Printf("%v signal...", s)
+			logger.Printf("%v signal", s)
 			switch s {
 			// Shutdown servers. No exit here.
 			case syscall.SIGINT, syscall.SIGTERM:
