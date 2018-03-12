@@ -57,24 +57,24 @@ func (a *App) ListenAndServe() error {
 }
 
 // Shutdown calls Shutdown for all server and returns first error if happens or nil.
-func (a *App) Shutdown() error {
+func (a *App) Shutdown() {
 	errs := make(chan error)
 	for _, server := range a.servers {
 		server := server
 		go func() {
-			errs <- server.Shutdown(context.Background())
+			err := server.Shutdown(context.Background())
+			if err != nil {
+				logger.Printf("server %s has been shutdown with: %v", server.Addr, err)
+			} else {
+				logger.Printf("server %s has been shutdown", server.Addr)
+			}
+			errs <- err
 		}()
 	}
 
-	var err error
 	for i := 0; i < len(a.servers); i++ {
-		e := <-errs
-		if e != nil && err == nil {
-			err = e
-		}
+		<-errs
 	}
-
-	return err
 }
 
 // SetWaitParentShutdownTimeout does nothing.
