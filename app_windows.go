@@ -17,6 +17,7 @@ import (
 // App specifies functions to control passed HTTP servers.
 type App struct {
 	PreServeFn         func(inherited bool) error
+	PreShutdownFn      func()
 	CompleteShutdownFn func()
 	PreParentExitFn    func()
 	servers            []*http.Server
