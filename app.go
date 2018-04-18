@@ -27,9 +27,13 @@ var (
 
 // App specifies functions to control passed HTTP servers.
 type App struct {
-	// PreServeFn is a common hook notifies client that all servers are
+	// PreServeFn is a common hook which notifies client that all servers are
 	// about to start serving.
 	PreServeFn func(inherited bool) error
+
+	// PreShutdownFn is a common hook which notifies client that all servers are
+	// about to start shutting down.
+	PreShutdownFn func()
 
 	// CompleteShutdownFn is a parent's hook, a part of shutdown process
 	// that allows client to do extra work after all http servers will
@@ -57,6 +61,7 @@ type App struct {
 func NewApp(servers ...*http.Server) *App {
 	a := &App{
 		PreServeFn:                func(inherited bool) error { return nil },
+		PreShutdownFn:             func() {},
 		CompleteShutdownFn:        func() {},
 		PreParentExitFn:           func() {},
 		servers:                   servers,
@@ -113,6 +118,7 @@ func (a *App) Shutdown() {
 	}
 
 	logger.Printf("shutdown servers...")
+	a.PreShutdownFn()
 	a.served.Wait()
 
 	var wg sync.WaitGroup
